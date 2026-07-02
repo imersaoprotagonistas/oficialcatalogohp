@@ -26,11 +26,36 @@ const DIA_MS = 86400000;
 // ---------------------------------------------------------------------------
 const formatBRL = (n) => (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) : 0);
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const formatPct = (n) => `${(Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+// Fluxo de precificação: De -> % desconto -> Valor do desconto -> Por -> 3% OFF -> À vista.
+// Desconto sempre incide sobre "De"; o 3% OFF sempre incide sobre "Por" (nunca sobre o "De").
+// Margem é calculada sobre o À vista (não sobre o Por), porque à vista é o piso — o preço
+// mais baixo que o cliente pode pagar, então é o cenário de margem mais conservador/real.
+function calcularPrecoSetor({ de, desconto, custo }) {
+  const deN = round2(de || 0);
+  const descontoN = Number(desconto) || 0;
+  const custoN = round2(custo || 0);
+  const valorDesconto = round2(deN * (descontoN / 100));
+  const por = round2(deN - valorDesconto);
+  const valor3off = round2(por * 0.03);
+  const vista = round2(por - valor3off);
+  const margemReais = round2(vista - custoN);
+  const margemPct = vista > 0 ? round2((margemReais / vista) * 100) : 0;
+  return { valorDesconto, por, valor3off, vista, margemReais, margemPct };
+}
+// Formatação condicional da margem: >= 28% verde, entre 27% e 28% amarelo, abaixo de 27% vermelho.
+function corMargem(margemPct) {
+  if (margemPct >= 28) return { dot: "bg-emerald-500", texto: "text-emerald-700", fundo: "bg-emerald-50", borda: "border-emerald-300", label: "Margem saudável" };
+  if (margemPct >= 27) return { dot: "bg-amber-500", texto: "text-amber-700", fundo: "bg-amber-50", borda: "border-amber-300", label: "Margem no limite" };
+  return { dot: "bg-red-500", texto: "text-red-700", fundo: "bg-red-50", borda: "border-red-300", label: "Margem abaixo do limite" };
+}
 const toWaNumber = (raw) => {
   const digits = String(raw || "").replace(/\D/g, "");
   return digits.startsWith("55") ? digits : `55${digits}`;
 };
 const CATALOGO_COR_PADRAO = "#f97316";
+const SEM_SABOR = "_"; // chave usada no carrinho pra produtos sem variação de sabor
 const hexToRgba = (hex, alpha) => {
   const clean = String(hex || CATALOGO_COR_PADRAO).replace("#", "");
   const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
@@ -44,6 +69,40 @@ function fileToDataUrl(file) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+const PERIODO_PRESETS = [
+  { id: "todos", label: "Todo o período" },
+  { id: "hoje", label: "Hoje" },
+  { id: "semana", label: "Esta semana" },
+  { id: "7dias", label: "Últimos 7 dias" },
+  { id: "mes", label: "Este mês" },
+  { id: "30dias", label: "Últimos 30 dias" },
+  { id: "ano", label: "Este ano" },
+  { id: "personalizado", label: "Personalizado…" },
+];
+// Calcula os limites [de, até) em ms do período escolhido, pra filtrar envios por criadoEm.
+// "de"/"ate" nulos significam sem limite (equivalente a "todo o período").
+function calcularIntervaloPeriodo(periodo, dataInicio, dataFim) {
+  const agora = new Date();
+  const inicioHoje = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate()).getTime();
+  const fimHoje = inicioHoje + DIA_MS;
+  switch (periodo) {
+    case "hoje": return { de: inicioHoje, ate: fimHoje };
+    case "semana": {
+      const offsetSegunda = (agora.getDay() + 6) % 7; // dias desde a última segunda-feira
+      return { de: inicioHoje - offsetSegunda * DIA_MS, ate: fimHoje };
+    }
+    case "7dias": return { de: inicioHoje - 6 * DIA_MS, ate: fimHoje };
+    case "mes": return { de: new Date(agora.getFullYear(), agora.getMonth(), 1).getTime(), ate: fimHoje };
+    case "30dias": return { de: inicioHoje - 29 * DIA_MS, ate: fimHoje };
+    case "ano": return { de: new Date(agora.getFullYear(), 0, 1).getTime(), ate: fimHoje };
+    case "personalizado": return {
+      de: dataInicio ? new Date(`${dataInicio}T00:00:00`).getTime() : null,
+      ate: dataFim ? new Date(`${dataFim}T00:00:00`).getTime() + DIA_MS : null,
+    };
+    default: return { de: null, ate: null };
+  }
 }
 
 function parseRotaPublica() {
@@ -71,6 +130,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [preview, setPreview] = useState(null); // { catalogoId, consultorId, envioId, envio, returnTo }
   const [sincronizando, setSincronizando] = useState(false);
+  const [erroCarregamento, setErroCarregamento] = useState(null);
 
   // Produtos/consultores/catálogos são públicos pra leitura (o backend filtra o que
   // cada papel pode ver); envios exige login, porque contém dados de clientes.
@@ -92,8 +152,10 @@ export default function App() {
     setSincronizando(false);
   }
 
-  useEffect(() => {
-    (async () => {
+  async function carregarInicial() {
+    setLoading(true);
+    setErroCarregamento(null);
+    try {
       const { catalogos: cat } = await carregarDadosPublicos();
 
       const rota = parseRotaPublica();
@@ -110,9 +172,14 @@ export default function App() {
         setPreview({ catalogoId: rota.catalogoId, consultorId: rota.consultorId, envioId, envio, simulate: false, returnTo: null });
         setView("publico");
       }
+    } catch (e) {
+      setErroCarregamento(e.message || "Não foi possível conectar ao servidor.");
+    } finally {
       setLoading(false);
-    })();
-  }, []);
+    }
+  }
+
+  useEffect(() => { carregarInicial(); }, []);
 
   // Sincroniza uma coleção inteira (o jeito como os painéis de gerente já editam
   // localmente) com o backend, fazendo só as chamadas por registro necessárias.
@@ -186,6 +253,22 @@ export default function App() {
     return <div className="min-h-[500px] flex items-center justify-center bg-stone-50 font-sans">
       <div className="text-stone-400 text-sm tracking-wide">Carregando sistema…</div>
     </div>;
+  }
+
+  if (erroCarregamento) {
+    return (
+      <div className="min-h-[500px] flex items-center justify-center bg-stone-50 font-sans px-4">
+        <div className="max-w-sm text-center">
+          <div className="font-black text-lg text-stone-900">Não deu pra carregar o sistema</div>
+          <p className="text-stone-500 text-sm mt-2">{erroCarregamento}</p>
+          <p className="text-stone-400 text-xs mt-1">Verifique se o backend (servidor da API) está rodando.</p>
+          <button onClick={carregarInicial}
+            className="mt-4 inline-flex items-center gap-1.5 bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2.5 rounded-md hover:bg-stone-800">
+            <RefreshCw size={13} /> Tentar de novo
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -417,6 +500,65 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
   );
 }
 
+// --- Busca + filtro de produtos (Marca / Produto / Categoria / Sabor) ---
+// Compartilhado entre o seletor de produtos do catálogo e a tabela de Produtos —
+// com 400+ produtos, filtrar em memória (sem ida ao servidor) já é instantâneo.
+function useFiltroProdutos(produtos) {
+  const [busca, setBusca] = useState("");
+  const [marca, setMarca] = useState("todas");
+  const [categoria, setCategoria] = useState("todas");
+  const [sabor, setSabor] = useState("todas");
+
+  const valoresUnicos = (campo) => [...new Set(produtos.map((p) => p[campo]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const marcas = useMemo(() => valoresUnicos("marca"), [produtos]);
+  const categorias = useMemo(() => valoresUnicos("categoria"), [produtos]);
+  const sabores = useMemo(() => [...new Set(produtos.flatMap((p) => p.sabores || []))].sort((a, b) => a.localeCompare(b)), [produtos]);
+
+  const filtrados = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    return produtos.filter((p) => {
+      if (termo && !p.nome.toLowerCase().includes(termo)) return false;
+      if (marca !== "todas" && p.marca !== marca) return false;
+      if (categoria !== "todas" && p.categoria !== categoria) return false;
+      if (sabor !== "todas" && !(p.sabores || []).includes(sabor)) return false;
+      return true;
+    });
+  }, [produtos, busca, marca, categoria, sabor]);
+
+  const temFiltroAtivo = Boolean(busca.trim()) || marca !== "todas" || categoria !== "todas" || sabor !== "todas";
+  function limpar() { setBusca(""); setMarca("todas"); setCategoria("todas"); setSabor("todas"); }
+
+  return { busca, setBusca, marca, setMarca, categoria, setCategoria, sabor, setSabor,
+    marcas, categorias, sabores, filtrados, temFiltroAtivo, limpar };
+}
+
+function FiltroProdutosBar({ f, placeholder }) {
+  return (
+    <div className="flex flex-wrap gap-2 items-center bg-stone-50 border border-stone-200 rounded-lg p-2.5 mb-3">
+      <div className="relative flex-1 min-w-[180px]">
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
+        <input value={f.busca} onChange={(e) => f.setBusca(e.target.value)} placeholder={placeholder || "Buscar por nome do produto…"}
+          className="w-full border border-stone-300 rounded-lg pl-8 pr-3 py-1.5 text-sm bg-white" />
+      </div>
+      <select value={f.marca} onChange={(e) => f.setMarca(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1.5 text-xs bg-white">
+        <option value="todas">Todas as marcas</option>
+        {f.marcas.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <select value={f.categoria} onChange={(e) => f.setCategoria(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1.5 text-xs bg-white">
+        <option value="todas">Todas as categorias</option>
+        {f.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select value={f.sabor} onChange={(e) => f.setSabor(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1.5 text-xs bg-white">
+        <option value="todas">Todos os sabores</option>
+        {f.sabores.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+      {f.temFiltroAtivo && (
+        <button onClick={f.limpar} className="text-xs font-bold uppercase tracking-wide text-stone-500 hover:text-stone-900">Limpar</button>
+      )}
+    </div>
+  );
+}
+
 // --- Painel > Catálogos ---
 function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSimular }) {
   const [criando, setCriando] = useState(false);
@@ -427,18 +569,37 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   const [corDestaque, setCorDestaque] = useState(CATALOGO_COR_PADRAO);
   const [selecionados, setSelecionados] = useState({});
   const [expandido, setExpandido] = useState(null);
-  const [editandoCapaId, setEditandoCapaId] = useState(null);
+  const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
   const [copiado, setCopiado] = useState(null);
+  const formRef = useRef(null);
+
+  useEffect(() => {
+    if (criando) formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [criando]);
 
   function iniciarCriacao() {
     const base = {};
-    produtos.forEach((p) => { base[p.id] = { on: false, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
-    setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO); setCriando(true);
+    produtos.forEach((p) => { base[p.id] = { on: false, de: p.precos?.[setor]?.de ?? 0, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
+    setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO);
+    setEditandoId(null); setCriando(true);
+  }
+  function iniciarEdicao(cat) {
+    const itensPorId = Object.fromEntries(cat.itens.map((it) => [it.produtoId, it]));
+    const base = {};
+    produtos.forEach((p) => {
+      const item = itensPorId[p.id];
+      base[p.id] = item
+        ? { on: true, de: item.precoDe ?? 0, vista: item.precoVista, parcelado: item.precoParcelado }
+        : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0 };
+    });
+    setSelecionados(base);
+    setNome(cat.nome); setSetor(cat.setor); setCapa(cat.capa || ""); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
+    setEditandoId(cat.id); setCriando(true);
   }
   function trocarSetor(novoSetor) {
     setSetor(novoSetor);
     const base = {};
-    produtos.forEach((p) => { base[p.id] = { ...selecionados[p.id], vista: p.precos?.[novoSetor]?.vista ?? 0, parcelado: p.precos?.[novoSetor]?.parcelado ?? 0 }; });
+    produtos.forEach((p) => { base[p.id] = { ...selecionados[p.id], de: p.precos?.[novoSetor]?.de ?? 0, vista: p.precos?.[novoSetor]?.vista ?? 0, parcelado: p.precos?.[novoSetor]?.parcelado ?? 0 }; });
     setSelecionados(base);
   }
   async function onCapaFile(e, setter) {
@@ -448,21 +609,23 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   }
   function salvar(status) {
     const itens = Object.entries(selecionados).filter(([, v]) => v.on)
-      .map(([produtoId, v]) => ({ produtoId, precoVista: Number(v.vista) || 0, precoParcelado: Number(v.parcelado) || 0 }));
+      .map(([produtoId, v]) => ({ produtoId, precoDe: Number(v.de) || 0, precoVista: Number(v.vista) || 0, precoParcelado: Number(v.parcelado) || 0 }));
     if (!nome.trim() || itens.length === 0) { alert("Dê um nome ao catálogo e selecione ao menos 1 produto."); return; }
-    const novo = { id: `cat_${Date.now()}`, nome, setor, itens, status, criadoEm: Date.now(), capa, subtitulo, corDestaque };
-    setCatalogos([novo, ...catalogos]);
-    setCriando(false);
+    if (editandoId) {
+      setCatalogos(catalogos.map((c) => (c.id === editandoId ? { ...c, nome, setor, itens, capa, subtitulo, corDestaque } : c)));
+    } else {
+      const novo = { id: `cat_${Date.now()}`, nome, setor, itens, status, criadoEm: Date.now(), capa, subtitulo, corDestaque };
+      setCatalogos([novo, ...catalogos]);
+    }
+    setCriando(false); setEditandoId(null);
   }
   function publicar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
   function desativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "inativo" } : c))); }
   function reativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
-  function salvarCapaEdicao(id, dados) {
-    setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, ...dados } : c)));
-    setEditandoCapaId(null);
-  }
 
-  const porCategoria = produtos.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
+  const filtro = useFiltroProdutos(produtos);
+  const porCategoria = filtro.filtrados.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
+  const totalSelecionados = Object.values(selecionados).filter((v) => v.on).length;
 
   return (
     <section>
@@ -477,7 +640,10 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
       </div>
 
       {criando && (
-        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-5 space-y-4">
+        <div ref={formRef} className="bg-white border border-stone-200 rounded-xl p-4 mb-5 space-y-4">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-stone-500">
+            {editandoId ? `Editando: ${nome || "catálogo"}` : "Novo catálogo"}
+          </h3>
           <div className="grid sm:grid-cols-2 gap-3">
             <input placeholder="Nome do catálogo (ex: Julho 2026)" value={nome} onChange={(e) => setNome(e.target.value)}
               className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
@@ -508,32 +674,67 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                 className="w-14 h-9 border border-stone-300 rounded-lg cursor-pointer" />
             </div>
           </div>
+          <div className="flex items-center justify-between gap-3">
+            <FiltroProdutosBar f={filtro} placeholder="Buscar produto por nome…" />
+            <span className="text-[11px] font-bold text-stone-400 whitespace-nowrap shrink-0 -mt-3">
+              {totalSelecionados} selecionado{totalSelecionados === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="text-[11px] text-stone-400 -mt-1">Preço por produto: <b>De</b> (opcional, riscado) · <b>Por</b> (no cartão) · <b>À vista</b></p>
           <div className="space-y-4 max-h-96 overflow-auto pr-1">
+            {filtro.filtrados.length === 0 && (
+              <p className="text-stone-400 text-sm text-center py-6">Nenhum produto encontrado com esse filtro.</p>
+            )}
             {Object.entries(porCategoria).map(([cat, itens]) => (
               <div key={cat}>
                 <h4 className="text-xs font-bold uppercase text-stone-400 mb-1.5">{cat}</h4>
                 <div className="space-y-1.5">
-                  {itens.map((p) => (
-                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer ${selecionados[p.id]?.on ? "border-lime-400 bg-lime-50" : "border-stone-200"}`}>
+                  {itens.map((p) => {
+                    const sel = selecionados[p.id] || {};
+                    const calc = calcularPrecoSetor({ de: sel.de, desconto: p.precos?.[setor]?.desconto, custo: p.custo });
+                    const bate = Math.abs(round2(sel.parcelado || 0) - calc.por) < 0.01 && Math.abs(round2(sel.vista || 0) - calc.vista) < 0.01;
+                    const vistaDigitado = round2(sel.vista || 0);
+                    const margemReal = round2(vistaDigitado - round2(p.custo || 0));
+                    const margemRealPct = vistaDigitado > 0 ? round2((margemReal / vistaDigitado) * 100) : 0;
+                    const corReal = corMargem(margemRealPct);
+                    const dica = `Margem com o preço à vista digitado: ${formatBRL(margemReal)} (${formatPct(margemRealPct)}) — ${corReal.label}.\n`
+                      + `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
+                      + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
+                    return (
+                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-lime-400 bg-lime-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
-                      <span className="flex-1">{p.emoji} {p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
-                      <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
-                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
-                        className="w-24 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço à vista" />
+                      <span className="flex-1 min-w-[140px]">{p.emoji} {p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
+                      <input type="number" step="0.01" value={selecionados[p.id]?.de ?? 0}
+                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], de: e.target.value } })}
+                        className="w-20 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço De (opcional)" />
                       <input type="number" step="0.01" value={selecionados[p.id]?.parcelado ?? 0}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], parcelado: e.target.value } })}
-                        className="w-24 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço parcelado" />
+                        className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço Por" />
+                      <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
+                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
+                        className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço à vista" />
+                      <span className={`inline-flex items-center gap-1 shrink-0 ${bate ? "" : "opacity-70"}`} title={dica}>
+                        <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
+                        {!bate && <span className="text-amber-600 text-xs">⚠</span>}
+                      </span>
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
           </div>
           <div className="flex gap-2">
-            <button onClick={() => salvar("publicado")} className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Publicar catálogo</button>
-            <button onClick={() => salvar("rascunho")} className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar rascunho</button>
-            <button onClick={() => setCriando(false)} className="text-stone-500 text-xs px-4 py-2">Cancelar</button>
+            {editandoId ? (
+              <button onClick={() => salvar()} className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar alterações</button>
+            ) : (
+              <>
+                <button onClick={() => salvar("publicado")} className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Publicar catálogo</button>
+                <button onClick={() => salvar("rascunho")} className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar rascunho</button>
+              </>
+            )}
+            <button onClick={() => { setCriando(false); setEditandoId(null); }} className="text-stone-500 text-xs px-4 py-2">Cancelar</button>
           </div>
         </div>
       )}
@@ -587,15 +788,11 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                     Reativar
                   </button>
                 )}
-                <button onClick={() => setEditandoCapaId(editandoCapaId === cat.id ? null : cat.id)}
-                  className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
-                  {editandoCapaId === cat.id ? "Fechar" : "Editar capa"}
+                <button onClick={() => iniciarEdicao(cat)}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
+                  <Pencil size={11} /> Editar
                 </button>
               </div>
-
-              {editandoCapaId === cat.id && (
-                <CatalogoCapaForm catalogo={cat} onSalvar={(dados) => salvarCapaEdicao(cat.id, dados)} onCancelar={() => setEditandoCapaId(null)} />
-              )}
 
               {expandido === cat.id && publicado && (
                 <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
@@ -627,48 +824,15 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   );
 }
 
-function CatalogoCapaForm({ catalogo, onSalvar, onCancelar }) {
-  const [capa, setCapa] = useState(catalogo.capa || "");
-  const [subtitulo, setSubtitulo] = useState(catalogo.subtitulo || "");
-  const [corDestaque, setCorDestaque] = useState(catalogo.corDestaque || CATALOGO_COR_PADRAO);
-
-  async function onFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setCapa(await fileToDataUrl(file));
-  }
-
-  return (
-    <div className="mt-3 pt-3 border-t border-stone-100 space-y-3">
-      <div className="flex items-center gap-3">
-        <div className="w-16 h-16 rounded-lg border border-dashed border-stone-300 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
-          {capa ? <img src={capa} alt="Capa" className="w-full h-full object-cover" /> : <span className="text-stone-300 text-[10px] text-center px-1">Sem capa</span>}
-        </div>
-        <input type="file" accept="image/*" onChange={onFile}
-          className="text-xs text-stone-500 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-stone-900 file:text-white file:text-[11px]" />
-      </div>
-      <input placeholder="Subtítulo (aparece no topo do catálogo)" value={subtitulo} onChange={(e) => setSubtitulo(e.target.value)}
-        className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-      <div className="flex items-center gap-2">
-        <label className="text-[11px] text-stone-400">Cor de destaque</label>
-        <input type="color" value={corDestaque} onChange={(e) => setCorDestaque(e.target.value)}
-          className="w-12 h-8 border border-stone-300 rounded-lg cursor-pointer" />
-      </div>
-      <div className="flex gap-2">
-        <button onClick={() => onSalvar({ capa, subtitulo, corDestaque })}
-          className="bg-neutral-950 text-white text-[11px] font-bold uppercase tracking-wide px-3.5 py-1.5 rounded-md">Salvar</button>
-        <button onClick={onCancelar} className="text-stone-500 text-[11px] px-3.5 py-1.5">Cancelar</button>
-      </div>
-    </div>
-  );
-}
 
 // --- Painel > Produtos ---
 function ProdutosSection({ produtos, setProdutos, envios }) {
   const [editing, setEditing] = useState(null);
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
-    marca: "", precoDe: "", badges: [], notaPromo: "",
-    precos: { primeira: { vista: "", parcelado: "" }, farm: { vista: "", parcelado: "" } } };
+    marca: "", sabores: [], custo: "", badges: [], notaPromo: "",
+    precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
+
+  const filtro = useFiltroProdutos(produtos);
 
   const vezesPedido = useMemo(() => {
     const m = {};
@@ -686,7 +850,9 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
   return (
     <section>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Produtos</h2>
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
+          Produtos <span className="text-stone-300 font-normal normal-case">({filtro.filtrados.length} de {produtos.length})</span>
+        </h2>
         <button onClick={() => setEditing(blank)}
           className="inline-flex items-center gap-1.5 bg-lime-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-lime-300">
           <Plus size={14} /> Novo produto
@@ -695,20 +861,24 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
 
       {editing && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={() => setEditing(null)} />}
 
+      <FiltroProdutosBar f={filtro} />
+
       <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
             <tr>
               <th className="text-left px-4 py-2.5 font-bold w-10"></th>
               <th className="text-left px-4 py-2.5 font-bold">Produto</th>
+              <th className="text-left px-4 py-2.5 font-bold">Marca</th>
               <th className="text-left px-4 py-2.5 font-bold">Categoria</th>
               <th className="text-right px-4 py-2.5 font-bold">Preço (1ª / Farm)</th>
+              <th className="text-center px-4 py-2.5 font-bold">Margem (1ª / Farm)</th>
               <th className="text-right px-4 py-2.5 font-bold">Vezes pedido</th>
               <th className="px-4 py-2.5"></th>
             </tr>
           </thead>
           <tbody>
-            {produtos.map((p) => (
+            {filtro.filtrados.map((p) => (
               <tr key={p.id} className="border-t border-stone-100">
                 <td className="px-4 py-2.5">
                   {p.imagem ? (
@@ -721,10 +891,24 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
                 </td>
                 <td className="px-4 py-2.5">
                   <div className="font-semibold">{p.nome}</div>
-                  <div className="text-[11px] text-stone-400">{p.gramatura}</div>
+                  <div className="text-[11px] text-stone-400">{[p.gramatura, (p.sabores || []).join(", ")].filter(Boolean).join(" · ")}</div>
                 </td>
+                <td className="px-4 py-2.5 text-stone-500">{p.marca || "—"}</td>
                 <td className="px-4 py-2.5 text-stone-500">{p.categoria}</td>
                 <td className="px-4 py-2.5 text-right font-mono text-xs">{formatBRL(p.precos?.primeira?.vista)} / {formatBRL(p.precos?.farm?.vista)}</td>
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center justify-center gap-2">
+                    {["primeira", "farm"].map((setor) => {
+                      const vista = round2(p.precos?.[setor]?.vista || 0);
+                      const margemPct = vista > 0 ? round2(((vista - round2(p.custo || 0)) / vista) * 100) : 0;
+                      const cor = corMargem(margemPct);
+                      return (
+                        <span key={setor} className={`w-2.5 h-2.5 rounded-full ${vista > 0 ? cor.dot : "bg-stone-200"}`}
+                          title={`${SETORES[setor]}: ${vista > 0 ? `margem ${formatPct(margemPct)} — ${cor.label}` : "sem preço"}`} />
+                      );
+                    })}
+                  </div>
+                </td>
                 <td className="px-4 py-2.5 text-right font-mono">{vezesPedido[p.id] || 0}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex justify-end gap-1">
@@ -734,7 +918,10 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
                 </td>
               </tr>
             ))}
-            {produtos.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto cadastrado.</td></tr>}
+            {produtos.length === 0 && <tr><td colSpan={8} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto cadastrado.</td></tr>}
+            {produtos.length > 0 && filtro.filtrados.length === 0 && (
+              <tr><td colSpan={8} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto encontrado com esse filtro.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -752,11 +939,23 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
     const dataUrl = await fileToDataUrl(file);
     setF((cur) => ({ ...cur, imagem: dataUrl }));
   }
+  const [novoSabor, setNovoSabor] = useState("");
+  function adicionarSabor() {
+    const v = novoSabor.trim();
+    if (!v || (f.sabores || []).includes(v)) { setNovoSabor(""); return; }
+    setF({ ...f, sabores: [...(f.sabores || []), v] });
+    setNovoSabor("");
+  }
+  function removerSabor(s) { setF({ ...f, sabores: (f.sabores || []).filter((x) => x !== s) }); }
+  function usarCalculado(setor) {
+    const calc = calcularPrecoSetor({ de: f.precos[setor].de, desconto: f.precos[setor].desconto, custo: f.custo });
+    setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], parcelado: calc.por, vista: calc.vista } } });
+  }
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSalvar({ ...f, precoDe: Number(f.precoDe) || 0, precos: {
-      primeira: { vista: Number(f.precos.primeira.vista) || 0, parcelado: Number(f.precos.primeira.parcelado) || 0 },
-      farm: { vista: Number(f.precos.farm.vista) || 0, parcelado: Number(f.precos.farm.parcelado) || 0 },
+    <form onSubmit={(e) => { e.preventDefault(); onSalvar({ ...f, custo: Number(f.custo) || 0, precos: {
+      primeira: { de: Number(f.precos.primeira.de) || 0, desconto: Number(f.precos.primeira.desconto) || 0, parcelado: Number(f.precos.primeira.parcelado) || 0, vista: Number(f.precos.primeira.vista) || 0 },
+      farm: { de: Number(f.precos.farm.de) || 0, desconto: Number(f.precos.farm.desconto) || 0, parcelado: Number(f.precos.farm.parcelado) || 0, vista: Number(f.precos.farm.vista) || 0 },
     } }); }}
       className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
       <div className="grid sm:grid-cols-4 gap-3">
@@ -788,10 +987,33 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
           className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
         <input placeholder="Marca (opcional)" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
           className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <input type="number" step="0.01" placeholder="Preço 'De' — opcional" value={f.precoDe} onChange={(e) => setF({ ...f, precoDe: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Preço riscado, só pra comparação visual" />
+        <input type="number" step="0.01" placeholder="Custo (R$)" value={f.custo ?? ""} onChange={(e) => setF({ ...f, custo: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Custo do produto, usado pra calcular a margem" />
         <input placeholder="Nota promocional (opcional)" value={f.notaPromo} onChange={(e) => setF({ ...f, notaPromo: e.target.value })}
           className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label className="text-[11px] text-stone-400 block mb-1.5">
+          Sabores (opcional — se o produto tiver 2 ou mais, o cliente escolhe a quantidade de cada um no catálogo)
+        </label>
+        <div className="flex flex-wrap gap-2 mb-2">
+          {(f.sabores || []).map((s) => (
+            <span key={s} className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-stone-900 text-white">
+              {s}
+              <button type="button" onClick={() => removerSabor(s)} className="hover:text-red-300"><X size={11} /></button>
+            </span>
+          ))}
+          {(f.sabores || []).length === 0 && <span className="text-[11px] text-stone-400">Nenhum sabor cadastrado — produto sem variação de sabor.</span>}
+        </div>
+        <div className="flex gap-2">
+          <input value={novoSabor} onChange={(e) => setNovoSabor(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); adicionarSabor(); } }}
+            placeholder="Ex: Chocolate" className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <button type="button" onClick={adicionarSabor}
+            className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-50">
+            Adicionar
+          </button>
+        </div>
       </div>
       <div>
         <label className="text-[11px] text-stone-400 block mb-1.5">Selos (aparecem na página do cliente)</label>
@@ -805,23 +1027,70 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
         </div>
       </div>
       <div className="grid sm:grid-cols-2 gap-4 pt-2">
-        {["primeira", "farm"].map((setor) => (
-          <div key={setor} className="bg-stone-50 rounded-lg p-3">
-            <div className="text-xs font-bold text-stone-500 mb-2">{SETORES[setor]}</div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[11px] text-stone-400">À vista (R$)</label>
-                <input type="number" step="0.01" value={f.precos[setor].vista} onChange={(e) => setPreco(setor, "vista", e.target.value)}
-                  className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+        {["primeira", "farm"].map((setor) => {
+          const sp = f.precos[setor];
+          const calc = calcularPrecoSetor({ de: sp.de, desconto: sp.desconto, custo: f.custo });
+          const porBate = Math.abs(round2(sp.parcelado || 0) - calc.por) < 0.01;
+          const vistaBate = Math.abs(round2(sp.vista || 0) - calc.vista) < 0.01;
+          return (
+            <div key={setor} className="bg-stone-50 rounded-lg p-3">
+              <div className="text-xs font-bold text-stone-500 mb-2">{SETORES[setor]}</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] text-stone-400">De (R$)</label>
+                  <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => setPreco(setor, "de", e.target.value)}
+                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Preço original, base do desconto" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-stone-400">Desconto (%)</label>
+                  <input type="number" step="0.01" value={sp.desconto ?? ""} onChange={(e) => setPreco(setor, "desconto", e.target.value)}
+                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Aplicado sobre o preço De" />
+                </div>
               </div>
-              <div>
-                <label className="text-[11px] text-stone-400">Parcelado (R$)</label>
-                <input type="number" step="0.01" value={f.precos[setor].parcelado} onChange={(e) => setPreco(setor, "parcelado", e.target.value)}
-                  className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className={`text-[11px] ${porBate ? "text-stone-400" : "text-amber-600 font-bold"}`}>Por (R$)</label>
+                  <input type="number" step="0.01" value={sp.parcelado} onChange={(e) => setPreco(setor, "parcelado", e.target.value)}
+                    className={`w-full border rounded-lg px-2 py-1.5 text-sm font-mono ${porBate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} />
+                </div>
+                <div>
+                  <label className={`text-[11px] ${vistaBate ? "text-stone-400" : "text-amber-600 font-bold"}`}>À vista (R$)</label>
+                  <input type="number" step="0.01" value={sp.vista} onChange={(e) => setPreco(setor, "vista", e.target.value)}
+                    className={`w-full border rounded-lg px-2 py-1.5 text-sm font-mono ${vistaBate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} />
+                </div>
               </div>
+
+              <div className="mt-2.5 pt-2.5 border-t border-stone-200 text-[11px] space-y-1">
+                <div className="flex justify-between text-stone-500"><span>Valor do desconto</span><span className="font-mono">{formatBRL(calc.valorDesconto)}</span></div>
+                <div className={`flex justify-between font-semibold ${porBate ? "text-stone-500" : "text-amber-700"}`}>
+                  <span>Por esperado</span><span className="font-mono">{formatBRL(calc.por)} {porBate ? "✓" : "⚠"}</span>
+                </div>
+                <div className="flex justify-between text-stone-500"><span>3% OFF (sobre o Por)</span><span className="font-mono">{formatBRL(calc.valor3off)}</span></div>
+                <div className={`flex justify-between font-semibold ${vistaBate ? "text-stone-500" : "text-amber-700"}`}>
+                  <span>À vista esperado</span><span className="font-mono">{formatBRL(calc.vista)} {vistaBate ? "✓" : "⚠"}</span>
+                </div>
+              </div>
+              {(() => {
+                const cor = corMargem(calc.margemPct);
+                return (
+                  <div className={`flex items-center justify-between mt-1.5 rounded-lg border px-2.5 py-1.5 ${cor.fundo} ${cor.borda}`} title={cor.label}>
+                    <span className={`flex items-center gap-1.5 text-[11px] font-bold ${cor.texto}`}>
+                      <span className={`w-2 h-2 rounded-full ${cor.dot}`} /> Margem (à vista)
+                    </span>
+                    <span className={`font-mono text-xs font-bold ${cor.texto}`}>{formatBRL(calc.margemReais)} ({formatPct(calc.margemPct)})</span>
+                  </div>
+                );
+              })()}
+
+              {(!porBate || !vistaBate) && (
+                <button type="button" onClick={() => usarCalculado(setor)}
+                  className="mt-2 text-[11px] font-bold uppercase tracking-wide text-lime-700 hover:text-lime-900">
+                  Usar valores calculados
+                </button>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="flex gap-2 pt-1">
         <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar produto</button>
@@ -918,9 +1187,13 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
   const [filtroConsultor, setFiltroConsultor] = useState("todos");
   const [filtroCatalogo, setFiltroCatalogo] = useState("todos");
   const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [periodo, setPeriodo] = useState("todos");
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState("");
 
   const consultoresEscopo = escopo === "proprio" ? consultores.filter((c) => c.id === apenasConsultorId) : consultores;
   const idsEscopo = new Set(consultoresEscopo.map((c) => c.id));
+  const { de, ate } = useMemo(() => calcularIntervaloPeriodo(periodo, dataInicio, dataFim), [periodo, dataInicio, dataFim]);
 
   const filtrados = envios.filter((e) => {
     if (!idsEscopo.has(e.consultorId)) return false;
@@ -929,6 +1202,8 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
     if (filtroStatus === "nao_visualizou" && e.visualizadoEm) return false;
     if (filtroStatus === "visualizou" && !e.visualizadoEm) return false;
     if (filtroStatus === "pediu" && !e.pedidoEm) return false;
+    if (de !== null && e.criadoEm < de) return false;
+    if (ate !== null && e.criadoEm >= ate) return false;
     return true;
   });
 
@@ -989,9 +1264,31 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
             <option value="visualizou">Visualizaram</option>
             <option value="pediu">Enviaram pedido</option>
           </select>
+          <div className="flex items-end gap-2">
+            <div>
+              <label className="block text-[10px] text-stone-400 mb-1">Período</label>
+              <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs">
+                {PERIODO_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            {periodo === "personalizado" && (
+              <>
+                <div>
+                  <label className="block text-[10px] text-stone-400 mb-1">De</label>
+                  <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)}
+                    className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-stone-400 mb-1">Até</label>
+                  <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)}
+                    className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs" />
+                </div>
+              </>
+            )}
+          </div>
           <div className="ml-auto flex items-center gap-3">
-            {(filtroConsultor !== "todos" || filtroCatalogo !== "todos" || filtroStatus !== "todos") && (
-              <button onClick={() => { setFiltroConsultor("todos"); setFiltroCatalogo("todos"); setFiltroStatus("todos"); }}
+            {(filtroConsultor !== "todos" || filtroCatalogo !== "todos" || filtroStatus !== "todos" || periodo !== "todos") && (
+              <button onClick={() => { setFiltroConsultor("todos"); setFiltroCatalogo("todos"); setFiltroStatus("todos"); setPeriodo("todos"); setDataInicio(""); setDataFim(""); }}
                 className="text-xs font-bold uppercase tracking-wide text-stone-500 hover:text-stone-900">Limpar filtros</button>
             )}
             {onSincronizar && (
@@ -1272,25 +1569,54 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
     { chave: "mais_vendido", titulo: "Mais Vendidos", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-yellow-800 via-amber-700 to-neutral-900" },
   ].map((s) => ({ ...s, itens: porBadge(s.chave) })).filter((s) => s.itens.length > 0);
 
-  const qtdTotal = Object.values(carrinho).reduce((s, q) => s + q, 0);
-  const carrinhoItens = Object.entries(carrinho).filter(([, q]) => q > 0).map(([produtoId, quantidade]) => {
+  // Carrinho: { [produtoId]: { [sabor || SEM_SABOR]: quantidade } } — permite pedir
+  // vários sabores do mesmo produto, cada combinação produto+sabor vira uma linha.
+  const qtdTotal = Object.values(carrinho).reduce((s, porSabor) => s + Object.values(porSabor).reduce((s2, q) => s2 + q, 0), 0);
+  const qtdPorProduto = (produtoId) => Object.values(carrinho[produtoId] || {}).reduce((s, q) => s + q, 0);
+  const carrinhoItens = Object.entries(carrinho).flatMap(([produtoId, porSabor]) => {
     const item = itensValidos.find((it) => it.produtoId === produtoId);
-    return { produtoId, quantidade, precoVista: item.precoVista, nome: produtosMap[produtoId].nome, emoji: produtosMap[produtoId].emoji, imagem: produtosMap[produtoId].imagem };
+    if (!item) return [];
+    return Object.entries(porSabor).filter(([, q]) => q > 0).map(([saborKey, quantidade]) => ({
+      produtoId, sabor: saborKey === SEM_SABOR ? null : saborKey, quantidade,
+      precoVista: item.precoVista, nome: produtosMap[produtoId].nome,
+      emoji: produtosMap[produtoId].emoji, imagem: produtosMap[produtoId].imagem,
+      marca: produtosMap[produtoId].marca || "Outras marcas",
+    }));
   });
   const total = carrinhoItens.reduce((s, it) => s + it.precoVista * it.quantidade, 0);
+  // Agrupa por marca — com muitos itens de marcas diferentes, o consultor precisa
+  // conseguir separar o pedido rapidinho pra conferir/organizar a entrega.
+  const carrinhoPorMarca = useMemo(() => {
+    const grupos = {};
+    carrinhoItens.forEach((it) => { (grupos[it.marca] = grupos[it.marca] || []).push(it); });
+    return Object.entries(grupos)
+      .sort(([a], [b]) => (a === "Outras marcas" ? 1 : b === "Outras marcas" ? -1 : a.localeCompare(b)))
+      .map(([marca, itens]) => ({ marca, itens, subtotal: itens.reduce((s, it) => s + it.precoVista * it.quantidade, 0) }));
+  }, [carrinhoItens]);
 
-  function alterarQtd(produtoId, delta) {
+  function alterarQtd(produtoId, sabor, delta) {
+    const saborKey = sabor || SEM_SABOR;
     setCarrinho((c) => {
-      const atual = c[produtoId] || 0; const novo = Math.max(0, atual + delta);
-      return { ...c, [produtoId]: novo };
+      const atual = c[produtoId]?.[saborKey] || 0;
+      const novo = Math.max(0, atual + delta);
+      return { ...c, [produtoId]: { ...c[produtoId], [saborKey]: novo } };
     });
     if (delta > 0 && !registrouCarrinho.current) { registrouCarrinho.current = true; onAdicionouCarrinho(); }
+  }
+  function removerDoCarrinho(produtoId, saborKey) {
+    setCarrinho((c) => ({ ...c, [produtoId]: { ...c[produtoId], [saborKey]: 0 } }));
   }
 
   function enviarPedido() {
     if (carrinhoItens.length === 0) return;
-    const linhas = carrinhoItens.map((it) => `• ${it.nome} — Qtd: ${it.quantidade} — ${formatBRL(it.precoVista)} un. — Subtotal: ${formatBRL(it.precoVista * it.quantidade)}`).join("\n");
-    const mensagem = `Olá! Gostaria de fazer o seguinte pedido pelo catálogo "${catalogo.nome}":\n\n${linhas}\n\n*Total: ${formatBRL(total)}*`;
+    const blocos = carrinhoPorMarca.map(({ marca, itens, subtotal }) => {
+      const linhas = itens.map((it) => {
+        const nomeExibido = it.sabor ? `${it.nome} (${it.sabor})` : it.nome;
+        return `• ${nomeExibido} — Qtd: ${it.quantidade} — ${formatBRL(it.precoVista)} un. — Subtotal: ${formatBRL(it.precoVista * it.quantidade)}`;
+      }).join("\n");
+      return `*${marca}*\n${linhas}\nSubtotal ${marca}: ${formatBRL(subtotal)}`;
+    }).join("\n\n");
+    const mensagem = `Olá! Gostaria de fazer o seguinte pedido pelo catálogo "${catalogo.nome}":\n\n${blocos}\n\n*Total: ${formatBRL(total)}*`;
     const url = `https://wa.me/${toWaNumber(consultor.whatsapp)}?text=${encodeURIComponent(mensagem)}`;
     onPedido({ itens: carrinhoItens, total });
     window.open(url, "_blank");
@@ -1393,7 +1719,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
               <p className="text-white/60 text-xs mt-1">{s.desc}</p>
             </div>
             <div className="flex gap-4 overflow-x-auto pb-2">
-              {s.itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={carrinho[it.produtoId] || 0} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+              {s.itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
             </div>
           </div>
         ))}
@@ -1405,7 +1731,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
             <p className="text-stone-500 text-sm py-10 text-center">Nenhum produto encontrado com esse filtro.</p>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {itensFiltrados.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={carrinho[it.produtoId] || 0} onAbrir={() => setModalItem(it)} accent={accent} />)}
+              {itensFiltrados.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} accent={accent} />)}
             </div>
           )}
         </div>
@@ -1419,16 +1745,16 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
       {/* Modal de detalhes / adicionar */}
       {modalItem && (
         <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 px-0 sm:px-4">
-          <div className="bg-neutral-900 border border-white/10 w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl overflow-hidden">
-            <div className="aspect-square bg-gradient-to-br from-white/10 to-transparent border-b border-dashed flex items-center justify-center relative overflow-hidden" style={{ borderColor: hexToRgba(accent, 0.3) }}>
+          <div className="bg-neutral-900 border border-white/10 w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl overflow-hidden max-h-[92vh] sm:max-h-[85vh] flex flex-col">
+            <div className="h-40 sm:h-48 shrink-0 bg-gradient-to-br from-white/10 to-transparent border-b border-dashed flex items-center justify-center relative overflow-hidden" style={{ borderColor: hexToRgba(accent, 0.3) }}>
               {modalItem.produto.imagem ? (
-                <img src={modalItem.produto.imagem} alt={modalItem.produto.nome} className="w-full h-full object-contain p-6" />
+                <img src={modalItem.produto.imagem} alt={modalItem.produto.nome} className="w-full h-full object-contain p-4" />
               ) : (
-                <span className="text-7xl">{modalItem.produto.emoji}</span>
+                <span className="text-6xl">{modalItem.produto.emoji}</span>
               )}
               <button onClick={() => setModalItem(null)} className="absolute top-3 right-3 bg-black/40 rounded-full p-1.5"><X size={16} /></button>
             </div>
-            <div className="p-5">
+            <div className="p-5 overflow-y-auto flex-1 min-h-0">
               {modalItem.produto.marca && <div className="text-orange-400 text-[11px] font-bold uppercase tracking-wide">{modalItem.produto.marca}</div>}
               <h3 className="font-black text-lg mt-0.5">{modalItem.produto.nome}</h3>
               <div className="text-stone-400 text-xs mt-0.5">{modalItem.produto.gramatura}</div>
@@ -1444,21 +1770,50 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
               {modalItem.produto.notaPromo && <p className="text-amber-400 text-xs mt-2">✦ {modalItem.produto.notaPromo}</p>}
 
               <div className="mt-4">
-                {modalItem.produto.precoDe > modalItem.precoParcelado && (
-                  <div className="text-stone-500 text-xs line-through">De {formatBRL(modalItem.produto.precoDe)}</div>
+                {modalItem.precoDe > modalItem.precoParcelado && (
+                  <div className="text-stone-500 text-xs line-through">De {formatBRL(modalItem.precoDe)}</div>
                 )}
                 <div className="font-black text-xl">{formatBRL(modalItem.precoParcelado)} <span className="text-stone-400 font-normal text-sm">no cartão</span></div>
                 <div className="text-emerald-400 font-bold text-sm">{formatBRL(modalItem.precoVista)} à vista</div>
               </div>
 
-              <div className="flex items-center justify-between mt-5 bg-white/5 rounded-full p-1.5">
-                <button onClick={() => alterarQtd(modalItem.produtoId, -1)} disabled={(carrinho[modalItem.produtoId] || 0) === 0}
-                  className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 disabled:opacity-30"><Minus size={15} /></button>
-                <span className="font-mono font-bold text-lg">{carrinho[modalItem.produtoId] || 0}</span>
-                <button onClick={() => alterarQtd(modalItem.produtoId, 1)} className="w-9 h-9 flex items-center justify-center rounded-full" style={{ backgroundColor: accent }}><Plus size={15} /></button>
-              </div>
-              <button onClick={() => setModalItem(null)} className="w-full mt-3 bg-white text-neutral-950 font-bold text-sm rounded-lg py-2.5">
-                {(carrinho[modalItem.produtoId] || 0) > 0 ? "Adicionado ao pedido" : "Fechar"}
+              {(modalItem.produto.sabores?.length || 0) >= 2 ? (
+                <div className="mt-5">
+                  <div className="text-stone-400 text-xs mb-2">
+                    Este produto tem preço único. Veja o valor no cartão de cada sabor abaixo (à vista = −3%).
+                  </div>
+                  <div className="space-y-1.5">
+                    {modalItem.produto.sabores.map((sabor) => {
+                      const qtdSabor = carrinho[modalItem.produtoId]?.[sabor] || 0;
+                      return (
+                        <div key={sabor} className="flex items-center justify-between bg-white/5 rounded-xl px-3 py-2">
+                          <div>
+                            <div className="text-sm font-semibold">{sabor}</div>
+                            <div className="text-stone-400 text-[11px]">{formatBRL(modalItem.precoParcelado)} no cartão</div>
+                          </div>
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            <button onClick={() => alterarQtd(modalItem.produtoId, sabor, -1)} disabled={qtdSabor === 0}
+                              className="w-7 h-7 flex items-center justify-center rounded-full bg-white/10 disabled:opacity-30"><Minus size={13} /></button>
+                            <span className="font-mono font-bold text-sm w-4 text-center">{qtdSabor}</span>
+                            <button onClick={() => alterarQtd(modalItem.produtoId, sabor, 1)} className="w-7 h-7 flex items-center justify-center rounded-full" style={{ backgroundColor: accent }}><Plus size={13} /></button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between mt-5 bg-white/5 rounded-full p-1.5">
+                  <button onClick={() => alterarQtd(modalItem.produtoId, modalItem.produto.sabores?.[0], -1)} disabled={qtdPorProduto(modalItem.produtoId) === 0}
+                    className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 disabled:opacity-30"><Minus size={15} /></button>
+                  <span className="font-mono font-bold text-lg">{qtdPorProduto(modalItem.produtoId)}</span>
+                  <button onClick={() => alterarQtd(modalItem.produtoId, modalItem.produto.sabores?.[0], 1)} className="w-9 h-9 flex items-center justify-center rounded-full" style={{ backgroundColor: accent }}><Plus size={15} /></button>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-3 border-t border-white/10 shrink-0">
+              <button onClick={() => setModalItem(null)} className="w-full bg-white text-neutral-950 font-bold text-sm rounded-lg py-2.5">
+                {qtdPorProduto(modalItem.produtoId) > 0 ? "Adicionado ao pedido" : "Fechar"}
               </button>
             </div>
           </div>
@@ -1481,18 +1836,28 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
               <h3 className="font-black text-sm uppercase tracking-wide">Seu pedido</h3>
               <button onClick={() => setShowCart(false)}><X size={18} className="text-stone-400" /></button>
             </div>
-            <div className="flex-1 overflow-auto px-5 py-3 space-y-1">
-              {carrinhoItens.map((it) => (
-                <div key={it.produtoId} className="flex items-center gap-3 py-2 border-b border-white/5 last:border-0">
-                  <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center text-xl shrink-0 overflow-hidden">
-                    {it.imagem ? <img src={it.imagem} alt={it.nome} className="w-full h-full object-contain" /> : it.emoji}
+            <div className="flex-1 overflow-auto px-5 py-3 space-y-4">
+              {carrinhoPorMarca.map(({ marca, itens, subtotal }) => (
+                <div key={marca}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-orange-400">{marca}</span>
+                    <span className="text-[11px] text-stone-500 font-mono">{formatBRL(subtotal)}</span>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm truncate">{it.nome}</div>
-                    <div className="text-xs text-stone-500">Qtd: {it.quantidade} × {formatBRL(it.precoVista)}</div>
+                  <div className="space-y-1">
+                    {itens.map((it) => (
+                      <div key={`${it.produtoId}::${it.sabor || ""}`} className="flex items-center gap-3 py-2 border-b border-white/5 last:border-0">
+                        <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center text-xl shrink-0 overflow-hidden">
+                          {it.imagem ? <img src={it.imagem} alt={it.nome} className="w-full h-full object-contain" /> : it.emoji}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm truncate">{it.nome}{it.sabor && <span className="text-stone-400 font-normal"> ({it.sabor})</span>}</div>
+                          <div className="text-xs text-stone-500">Qtd: {it.quantidade} × {formatBRL(it.precoVista)}</div>
+                        </div>
+                        <span className="font-mono text-sm font-bold shrink-0">{formatBRL(it.precoVista * it.quantidade)}</span>
+                        <button onClick={() => removerDoCarrinho(it.produtoId, it.sabor || SEM_SABOR)} className="text-stone-600 hover:text-red-400 shrink-0"><Trash2 size={14} /></button>
+                      </div>
+                    ))}
                   </div>
-                  <span className="font-mono text-sm font-bold shrink-0">{formatBRL(it.precoVista * it.quantidade)}</span>
-                  <button onClick={() => setCarrinho((c) => ({ ...c, [it.produtoId]: 0 }))} className="text-stone-600 hover:text-red-400 shrink-0"><Trash2 size={14} /></button>
                 </div>
               ))}
             </div>
@@ -1516,7 +1881,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
 
 function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
   const p = item.produto;
-  const temDe = p.precoDe > item.precoParcelado;
+  const temDe = item.precoDe > item.precoParcelado;
   const cor = accent || CATALOGO_COR_PADRAO;
   return (
     <button onClick={onAbrir} className={`text-left bg-neutral-900 border rounded-xl overflow-hidden transition ${largura || ""}`} style={{ borderColor: "rgba(255,255,255,0.1)" }}
@@ -1542,9 +1907,12 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
           </div>
         )}
         {p.notaPromo && <p className="text-amber-400 text-[10px] mt-1.5">✦ {p.notaPromo}</p>}
+        {(p.sabores?.length || 0) >= 2 && (
+          <p className="text-stone-400 text-[10px] mt-1.5">{p.sabores.length} sabores disponíveis</p>
+        )}
 
         <div className="mt-2.5">
-          {temDe && <div className="text-stone-500 text-[10px] line-through">De {formatBRL(p.precoDe)}</div>}
+          {temDe && <div className="text-stone-500 text-[10px] line-through">De {formatBRL(item.precoDe)}</div>}
           <div className="font-black text-sm">{formatBRL(item.precoParcelado)} <span className="text-stone-500 font-normal text-[10px]">no cartão</span></div>
           <div className="text-emerald-400 font-bold text-xs">{formatBRL(item.precoVista)} à vista</div>
         </div>

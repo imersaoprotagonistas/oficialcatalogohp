@@ -17,10 +17,11 @@ function toRow(p) {
     imagem: p.imagem,
     ativo: p.ativo,
     marca: p.marca,
-    precoDe: p.preco_de === null ? 0 : Number(p.preco_de),
+    sabores: p.sabores || [], // array de sabores disponíveis, ex: ["Chocolate","Baunilha"]
+    custo: p.custo === null ? 0 : Number(p.custo),
     badges: p.badges,
     notaPromo: p.nota_promo,
-    precos: p.precos,
+    precos: p.precos, // { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista } }
   };
 }
 
@@ -33,10 +34,10 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
   const id = b.id || randomUUID();
   const { rows } = await pool.query(
-    `insert into produtos (id, nome, gramatura, categoria, descricao, emoji, imagem, ativo, marca, preco_de, badges, nota_promo, precos)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+    `insert into produtos (id, nome, gramatura, categoria, descricao, emoji, imagem, ativo, marca, sabores, custo, badges, nota_promo, precos)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning *`,
     [id, b.nome, b.gramatura, b.categoria, b.descricao, b.emoji, b.imagem, b.ativo ?? true, b.marca,
-      b.precoDe || 0, JSON.stringify(b.badges || []), b.notaPromo, JSON.stringify(b.precos || {})]
+      JSON.stringify(b.sabores || []), b.custo || 0, JSON.stringify(b.badges || []), b.notaPromo, JSON.stringify(b.precos || {})]
   );
   res.status(201).json(toRow(rows[0]));
 }));
@@ -45,10 +46,10 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
   const { rows } = await pool.query(
     `update produtos set nome=$1, gramatura=$2, categoria=$3, descricao=$4, emoji=$5, imagem=$6, ativo=$7,
-       marca=$8, preco_de=$9, badges=$10, nota_promo=$11, precos=$12
-     where id=$13 returning *`,
+       marca=$8, sabores=$9, custo=$10, badges=$11, nota_promo=$12, precos=$13
+     where id=$14 returning *`,
     [b.nome, b.gramatura, b.categoria, b.descricao, b.emoji, b.imagem, b.ativo ?? true, b.marca,
-      b.precoDe || 0, JSON.stringify(b.badges || []), b.notaPromo, JSON.stringify(b.precos || {}), req.params.id]
+      JSON.stringify(b.sabores || []), b.custo || 0, JSON.stringify(b.badges || []), b.notaPromo, JSON.stringify(b.precos || {}), req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Produto não encontrado." });
   res.json(toRow(rows[0]));

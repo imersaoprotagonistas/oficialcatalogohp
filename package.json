@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "server": "npm --prefix server run dev",
     "server:install": "npm --prefix server install",
-    "server:seed": "npm --prefix server run seed"
+    "server:seed": "npm --prefix server run seed",
+    "server:hash-senha": "npm --prefix server run hash-senha --"
   },
   "dependencies": {
     "react": "^18.3.1",

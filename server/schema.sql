@@ -11,10 +11,13 @@ create table if not exists produtos (
   imagem      text, -- foto do produto em data URL (base64), opcional
   ativo       boolean not null default true,
   marca       text,
-  preco_de    numeric,
+  sabor       text, -- legado, não usado mais pelo app (ver "sabores" abaixo)
+  sabores     jsonb not null default '[]', -- array de strings, ex: ["Chocolate","Baunilha"]
+  custo       numeric, -- custo do produto (usado pra calcular a margem)
+  preco_de    numeric, -- legado, não usado mais pelo app (o "De" agora fica dentro de precos, por setor)
   badges      jsonb not null default '[]',
   nota_promo  text,
-  precos      jsonb not null default '{}'  -- { primeira: { vista, parcelado }, farm: { vista, parcelado } }
+  precos      jsonb not null default '{}'  -- { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista } }
 );
 
 create table if not exists consultores (
@@ -31,7 +34,7 @@ create table if not exists catalogos (
   id            text primary key,
   nome          text not null,
   setor         text not null check (setor in ('farm', 'primeira')),
-  itens         jsonb not null default '[]', -- [{ produtoId, precoVista, precoParcelado }]
+  itens         jsonb not null default '[]', -- [{ produtoId, precoDe, precoVista, precoParcelado }]
   status        text not null default 'rascunho' check (status in ('rascunho', 'publicado', 'inativo')),
   criado_em     timestamptz not null default now(),
   capa          text,
@@ -54,3 +57,9 @@ create table if not exists envios (
 
 create index if not exists envios_catalogo_id_idx on envios(catalogo_id);
 create index if not exists envios_consultor_id_idx on envios(consultor_id);
+
+-- Se você já tinha rodado este arquivo antes (tabela produtos já existe sem as colunas
+-- abaixo), rode só as linhas que faltarem:
+-- alter table produtos add column if not exists sabor text;
+-- alter table produtos add column if not exists custo numeric;
+-- alter table produtos add column if not exists sabores jsonb not null default '[]';
