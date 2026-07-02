@@ -1,0 +1,1558 @@
+import { useState, useEffect, useRef, useMemo } from "react";
+import {
+  Package, Users, LayoutGrid, Activity, Plus, Trash2, Pencil, Copy,
+  ShoppingCart, Send, Eye, LogOut, X, Check, Minus, MessageCircle,
+  UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw
+} from "lucide-react";
+import { api } from "./api.js";
+
+const SETORES = { primeira: "1º Compra", farm: "Farm" };
+const CATEGORIA_SUGESTOES = ["Proteínas", "Creatina", "Aminoácidos", "Vitaminas", "Pré-treino", "Snacks", "Acessórios", "Outros"];
+const BADGE_CONFIG = {
+  marca_exclusiva: { label: "Marca exclusiva", cls: "bg-orange-500/15 text-orange-400 border border-orange-500/30" },
+  lancamento: { label: "Lançamento", cls: "bg-sky-500/15 text-sky-400 border border-sky-500/30" },
+  oferta: { label: "Oferta", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
+  mais_vendido: { label: "Mais vendido", cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
+};
+const CATEGORIA_DOT = {
+  "Proteínas": "bg-red-500", "Creatina": "bg-emerald-500", "Aminoácidos": "bg-lime-500",
+  "Vitaminas": "bg-sky-500", "Pré-treino": "bg-violet-500", "Snacks": "bg-cyan-500",
+  "Acessórios": "bg-stone-400", "Outros": "bg-stone-500",
+};
+const DIA_MS = 86400000;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const formatBRL = (n) => (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) : 0);
+const toWaNumber = (raw) => {
+  const digits = String(raw || "").replace(/\D/g, "");
+  return digits.startsWith("55") ? digits : `55${digits}`;
+};
+const CATALOGO_COR_PADRAO = "#f97316";
+const hexToRgba = (hex, alpha) => {
+  const clean = String(hex || CATALOGO_COR_PADRAO).replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  const n = parseInt(full, 16) || 0xf97316;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseRotaPublica() {
+  const m = window.location.hash.match(/^#\/c\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/);
+  if (!m) return null;
+  return { catalogoId: m[1], consultorId: m[2], envioId: m[3] || null };
+}
+function linkBase() {
+  return `${window.location.origin}${window.location.pathname}`.replace(/\/$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [produtos, setProdutosState] = useState([]);
+  const [consultores, setConsultoresState] = useState([]);
+  const [catalogos, setCatalogosState] = useState([]);
+  const [envios, setEnvios] = useState([]);
+
+  const [view, setView] = useState("login");
+  const [currentUser, setCurrentUser] = useState(null);
+  const [preview, setPreview] = useState(null); // { catalogoId, consultorId, envioId, envio, returnTo }
+  const [sincronizando, setSincronizando] = useState(false);
+
+  // Produtos/consultores/catálogos são públicos pra leitura (o backend filtra o que
+  // cada papel pode ver); envios exige login, porque contém dados de clientes.
+  async function carregarDadosPublicos() {
+    const [p, c, cat] = await Promise.all([api.produtos.listar(), api.consultores.listar(), api.catalogos.listar()]);
+    setProdutosState(p); setConsultoresState(c); setCatalogosState(cat);
+    return { produtos: p, consultores: c, catalogos: cat };
+  }
+  async function carregarEnvios() {
+    const env = await api.envios.listar();
+    setEnvios(env);
+    return env;
+  }
+
+  async function sincronizar() {
+    setSincronizando(true);
+    await carregarDadosPublicos();
+    if (currentUser) await carregarEnvios();
+    setSincronizando(false);
+  }
+
+  useEffect(() => {
+    (async () => {
+      const { catalogos: cat } = await carregarDadosPublicos();
+
+      const rota = parseRotaPublica();
+      if (rota) {
+        const catalogoAlvo = cat.find((c) => c.id === rota.catalogoId);
+        const ativo = catalogoAlvo?.status === "publicado";
+        let envioId = rota.envioId;
+        let envio = envioId ? await api.envios.buscar(envioId) : null;
+        if (ativo && !envio) {
+          envio = await api.envios.criar({ catalogoId: rota.catalogoId, consultorId: rota.consultorId });
+          envioId = envio.id;
+          window.history.replaceState(null, "", `${linkBase()}#/c/${rota.catalogoId}/${rota.consultorId}/${envioId}`);
+        }
+        setPreview({ catalogoId: rota.catalogoId, consultorId: rota.consultorId, envioId, envio, simulate: false, returnTo: null });
+        setView("publico");
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  // Sincroniza uma coleção inteira (o jeito como os painéis de gerente já editam
+  // localmente) com o backend, fazendo só as chamadas por registro necessárias.
+  async function persistirColecao(recurso, atual, novo, setter) {
+    setter(novo);
+    setSaving(true);
+    try {
+      const idsNovos = new Set(novo.map((x) => x.id));
+      const removidos = atual.filter((x) => !idsNovos.has(x.id));
+      const criados = novo.filter((x) => !atual.some((a) => a.id === x.id));
+      const atualizados = novo.filter((x) => {
+        const anterior = atual.find((a) => a.id === x.id);
+        return anterior && JSON.stringify(anterior) !== JSON.stringify(x);
+      });
+      await Promise.all([
+        ...removidos.map((x) => recurso.remover(x.id)),
+        ...criados.map((x) => recurso.criar(x)),
+        ...atualizados.map((x) => recurso.atualizar(x.id, x)),
+      ]);
+    } finally {
+      setSaving(false);
+    }
+  }
+  function setProdutos(v) { persistirColecao(api.produtos, produtos, v, setProdutosState); }
+  function setConsultores(v) { persistirColecao(api.consultores, consultores, v, setConsultoresState); }
+  function setCatalogos(v) { persistirColecao(api.catalogos, catalogos, v, setCatalogosState); }
+
+  async function criarEnvio(catalogoId, consultorId, clienteNome, clienteTelefone) {
+    const novo = await api.envios.criar({ catalogoId, consultorId, clienteNome, clienteTelefone });
+    setEnvios((atual) => [novo, ...atual]);
+    return novo;
+  }
+
+  async function marcarEvento(envioId, campo, pedidoDetalhe) {
+    const atualizado = await api.envios.marcarEvento(envioId, campo, pedidoDetalhe);
+    setEnvios((atual) => atual.map((e) => (e.id === envioId ? atualizado : e)));
+    setPreview((p) => (p && p.envioId === envioId ? { ...p, envio: atualizado } : p));
+  }
+
+  async function loginGerente(senha) {
+    const { token } = await api.auth.loginGerente(senha);
+    api.setToken(token);
+    setCurrentUser({ role: "gerente" });
+    await Promise.all([carregarDadosPublicos(), carregarEnvios()]);
+    setView("gerente");
+  }
+  async function loginConsultor(consultorId, senha) {
+    const { token, user } = await api.auth.loginConsultor(consultorId, senha);
+    api.setToken(token);
+    setCurrentUser({ role: "consultor", ...user });
+    await Promise.all([carregarDadosPublicos(), carregarEnvios()]);
+    setView("consultor");
+  }
+
+  function logout() {
+    api.setToken(null);
+    setCurrentUser(null); setPreview(null); setEnvios([]); setView("login");
+  }
+
+  function abrirSimulacao(catalogoId, consultorId, returnTo) {
+    setPreview({ catalogoId, consultorId, envioId: null, envio: null, simulate: true, returnTo });
+    setView("publico");
+  }
+  function abrirEnvioReal(catalogoId, consultorId, envioId, returnTo) {
+    const envio = envios.find((e) => e.id === envioId) || null;
+    setPreview({ catalogoId, consultorId, envioId, envio, simulate: false, returnTo });
+    setView("publico");
+  }
+
+  if (loading) {
+    return <div className="min-h-[500px] flex items-center justify-center bg-stone-50 font-sans">
+      <div className="text-stone-400 text-sm tracking-wide">Carregando sistema…</div>
+    </div>;
+  }
+
+  return (
+    <div className="min-h-[600px] bg-stone-50 font-sans text-stone-900">
+      {view === "login" && (
+        <LoginScreen consultores={consultores} onGerenteLogin={loginGerente} onConsultorLogin={loginConsultor} />
+      )}
+
+      {view === "gerente" && currentUser?.role === "gerente" && (
+        <GerentePanel
+          produtos={produtos} setProdutos={setProdutos}
+          consultores={consultores} setConsultores={setConsultores}
+          catalogos={catalogos} setCatalogos={setCatalogos}
+          envios={envios} saving={saving} onLogout={logout}
+          onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
+          onSincronizar={sincronizar} sincronizando={sincronizando}
+        />
+      )}
+
+      {view === "consultor" && currentUser?.role === "consultor" && (
+        <ConsultorPanel
+          consultor={currentUser} catalogos={catalogos} envios={envios}
+          onCriarEnvio={criarEnvio} onLogout={logout}
+          onSimular={(catId) => abrirSimulacao(catId, currentUser.id, "consultor")}
+          onAbrirEnvio={(catId, envioId) => abrirEnvioReal(catId, currentUser.id, envioId, "consultor")}
+          onSincronizar={sincronizar} sincronizando={sincronizando}
+        />
+      )}
+
+      {view === "publico" && preview && (
+        <CatalogoPublico
+          catalogo={(() => {
+            const alvo = catalogos.find((c) => c.id === preview.catalogoId);
+            const bloqueado = alvo && !preview.simulate && alvo.status !== "publicado";
+            return bloqueado ? undefined : alvo;
+          })()}
+          consultor={consultores.find((c) => c.id === preview.consultorId)}
+          produtos={produtos}
+          simulate={preview.simulate}
+          onPrimeiraVisualizacao={() => {
+            if (preview.simulate || !preview.envioId) return;
+            marcarEvento(preview.envioId, "visualizadoEm");
+          }}
+          onAdicionouCarrinho={() => {
+            if (preview.simulate || !preview.envioId) return;
+            if (preview.envio && !preview.envio.carrinhoEm) marcarEvento(preview.envioId, "carrinhoEm");
+          }}
+          onPedido={(detalhe) => {
+            if (preview.simulate || !preview.envioId) return;
+            marcarEvento(preview.envioId, "pedidoEm", detalhe);
+          }}
+          onSair={preview.returnTo ? () => { setView(preview.returnTo === "consultor" ? "consultor" : "gerente"); setPreview(null); } : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared chrome — top nav + black hero band
+// ---------------------------------------------------------------------------
+function TopNav({ tabs, current, onNav, roleLabel, onLogout }) {
+  return (
+    <header className="bg-neutral-950 text-stone-300">
+      <div className="max-w-6xl mx-auto px-6 flex items-center justify-between h-14">
+        <div className="font-black tracking-tight text-white text-lg">
+          HP <span className="text-lime-400">DISTRIBUIDORA</span>
+        </div>
+        <nav className="hidden sm:flex items-center gap-6">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => onNav(t.id)}
+              className={`text-xs font-bold uppercase tracking-wide pb-1 border-b-2 transition ${
+                current === t.id ? "text-white border-lime-400" : "text-stone-400 border-transparent hover:text-stone-200"}`}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+        <div className="flex items-center gap-3">
+          <span className="hidden sm:inline text-[11px] text-stone-500 uppercase tracking-wide">{roleLabel}</span>
+          <button onClick={onLogout}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-stone-300 border border-stone-700 rounded-md px-3 py-1.5 hover:bg-stone-800">
+            <LogOut size={13} /> Sair
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function Hero({ title, stats }) {
+  return (
+    <div className="bg-neutral-950 px-6 pb-8 pt-6">
+      <div className="max-w-6xl mx-auto flex flex-wrap items-end justify-between gap-6">
+        <h1 className="text-white font-black uppercase tracking-tighter text-5xl leading-none">{title}</h1>
+        {stats && (
+          <div className="flex gap-8">
+            {stats.map((s) => (
+              <div key={s.label} className="text-right">
+                <div className={`font-black text-3xl leading-none ${s.color || "text-white"}`}>{s.value}</div>
+                <div className="text-[10px] text-stone-500 uppercase tracking-wide mt-1">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Login
+// ---------------------------------------------------------------------------
+function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
+  const [tab, setTab] = useState("gerente");
+  const [senha, setSenha] = useState("");
+  const [consultorId, setConsultorId] = useState(consultores[0]?.id || "");
+  const [erro, setErro] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  async function submitGerente(e) {
+    e.preventDefault();
+    setErro(""); setEnviando(true);
+    try { await onGerenteLogin(senha); }
+    catch { setErro("Senha incorreta."); }
+    finally { setEnviando(false); }
+  }
+  async function submitConsultor(e) {
+    e.preventDefault();
+    setErro(""); setEnviando(true);
+    try { await onConsultorLogin(consultorId, senha); }
+    catch { setErro("Consultor ou senha incorretos."); }
+    finally { setEnviando(false); }
+  }
+
+  return (
+    <div className="min-h-[600px] bg-neutral-950 flex items-center justify-center px-4 py-16">
+      <div className="w-full max-w-sm">
+        <div className="mb-10 text-center">
+          <div className="font-black text-3xl tracking-tighter text-white">HP <span className="text-lime-400">DISTRIBUIDORA</span></div>
+          <p className="text-stone-500 text-xs mt-2 uppercase tracking-wide">Painel de catálogos</p>
+        </div>
+
+        <div className="flex rounded-lg bg-stone-900 p-1 mb-6">
+          <button onClick={() => { setTab("gerente"); setErro(""); }}
+            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "gerente" ? "bg-lime-400 text-neutral-950" : "text-stone-400"}`}>
+            Gerente
+          </button>
+          <button onClick={() => { setTab("consultor"); setErro(""); }}
+            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "consultor" ? "bg-lime-400 text-neutral-950" : "text-stone-400"}`}>
+            Consultor
+          </button>
+        </div>
+
+        {tab === "gerente" ? (
+          <form onSubmit={submitGerente} className="space-y-3">
+            <input type="password" placeholder="Senha do gerente" value={senha} onChange={(e) => setSenha(e.target.value)}
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400" />
+            {erro && <p className="text-red-400 text-xs">{erro}</p>}
+            <button type="submit" disabled={enviando} className="w-full bg-lime-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-lime-300 transition disabled:opacity-60">
+              {enviando ? "Entrando…" : "Entrar"}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={submitConsultor} className="space-y-3">
+            <select value={consultorId} onChange={(e) => setConsultorId(e.target.value)}
+              className="w-full bg-stone-900 border border-stone-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400">
+              {consultores.map((c) => <option key={c.id} value={c.id}>{c.nome} — {SETORES[c.setor]}</option>)}
+            </select>
+            <input type="password" placeholder="Sua senha" value={senha} onChange={(e) => setSenha(e.target.value)}
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400" />
+            {erro && <p className="text-red-400 text-xs">{erro}</p>}
+            <button type="submit" disabled={enviando} className="w-full bg-lime-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-lime-300 transition disabled:opacity-60">
+              {enviando ? "Entrando…" : "Entrar"}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gerente — PAINEL / CONSULTORES / RASTREAMENTO
+// ---------------------------------------------------------------------------
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, envios, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+  const [tab, setTab] = useState("painel");
+  const tabs = [
+    { id: "painel", label: "Painel" },
+    { id: "consultores", label: "Consultores" },
+    { id: "rastreamento", label: "Rastreamento" },
+  ];
+
+  const produtosAtivos = produtos.filter((p) => p.ativo !== false).length;
+
+  return (
+    <div>
+      <TopNav tabs={tabs} current={tab} onNav={setTab} roleLabel="Gestor comercial" onLogout={onLogout} />
+
+      {tab === "painel" && (
+        <>
+          <Hero title="Painel" stats={[
+            { label: "Produtos ativos", value: produtosAtivos },
+            { label: "Catálogos", value: catalogos.length },
+            { label: "Consultores", value: consultores.length },
+          ]} />
+          <div className="max-w-6xl mx-auto px-6 py-8 space-y-10">
+            {saving && <div className="text-[11px] text-stone-400 -mt-4">Salvando…</div>}
+            <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
+              setCatalogos={setCatalogos} onSimular={onSimular} />
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} />
+          </div>
+        </>
+      )}
+
+      {tab === "consultores" && (
+        <>
+          <Hero title="Consultores" stats={[{ label: "Cadastrados", value: consultores.length }]} />
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            <ConsultoresSection consultores={consultores} setConsultores={setConsultores} catalogos={catalogos} envios={envios} />
+          </div>
+        </>
+      )}
+
+      {tab === "rastreamento" && (
+        <RastreamentoView consultores={consultores} catalogos={catalogos} envios={envios} escopo="todos"
+          onSincronizar={onSincronizar} sincronizando={sincronizando} />
+      )}
+    </div>
+  );
+}
+
+// --- Painel > Catálogos ---
+function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSimular }) {
+  const [criando, setCriando] = useState(false);
+  const [nome, setNome] = useState("");
+  const [setor, setSetor] = useState("farm");
+  const [capa, setCapa] = useState("");
+  const [subtitulo, setSubtitulo] = useState("");
+  const [corDestaque, setCorDestaque] = useState(CATALOGO_COR_PADRAO);
+  const [selecionados, setSelecionados] = useState({});
+  const [expandido, setExpandido] = useState(null);
+  const [editandoCapaId, setEditandoCapaId] = useState(null);
+  const [copiado, setCopiado] = useState(null);
+
+  function iniciarCriacao() {
+    const base = {};
+    produtos.forEach((p) => { base[p.id] = { on: false, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
+    setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO); setCriando(true);
+  }
+  function trocarSetor(novoSetor) {
+    setSetor(novoSetor);
+    const base = {};
+    produtos.forEach((p) => { base[p.id] = { ...selecionados[p.id], vista: p.precos?.[novoSetor]?.vista ?? 0, parcelado: p.precos?.[novoSetor]?.parcelado ?? 0 }; });
+    setSelecionados(base);
+  }
+  async function onCapaFile(e, setter) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setter(await fileToDataUrl(file));
+  }
+  function salvar(status) {
+    const itens = Object.entries(selecionados).filter(([, v]) => v.on)
+      .map(([produtoId, v]) => ({ produtoId, precoVista: Number(v.vista) || 0, precoParcelado: Number(v.parcelado) || 0 }));
+    if (!nome.trim() || itens.length === 0) { alert("Dê um nome ao catálogo e selecione ao menos 1 produto."); return; }
+    const novo = { id: `cat_${Date.now()}`, nome, setor, itens, status, criadoEm: Date.now(), capa, subtitulo, corDestaque };
+    setCatalogos([novo, ...catalogos]);
+    setCriando(false);
+  }
+  function publicar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
+  function desativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "inativo" } : c))); }
+  function reativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
+  function salvarCapaEdicao(id, dados) {
+    setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, ...dados } : c)));
+    setEditandoCapaId(null);
+  }
+
+  const porCategoria = produtos.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Catálogos</h2>
+        {!criando && (
+          <button onClick={iniciarCriacao}
+            className="inline-flex items-center gap-1.5 bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-800">
+            <Plus size={14} /> Novo catálogo
+          </button>
+        )}
+      </div>
+
+      {criando && (
+        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-5 space-y-4">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <input placeholder="Nome do catálogo (ex: Julho 2026)" value={nome} onChange={(e) => setNome(e.target.value)}
+              className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            <select value={setor} onChange={(e) => trocarSetor(e.target.value)} className="border border-stone-300 rounded-lg px-3 py-2 text-sm">
+              <option value="farm">Setor: Farm</option>
+              <option value="primeira">Setor: 1º Compra</option>
+            </select>
+          </div>
+          <div className="grid sm:grid-cols-[auto_1fr_auto] gap-3 items-center bg-stone-50 rounded-lg p-3">
+            <div className="flex items-center gap-3">
+              <div className="w-16 h-16 rounded-lg border border-dashed border-stone-300 bg-white overflow-hidden flex items-center justify-center shrink-0">
+                {capa ? <img src={capa} alt="Capa" className="w-full h-full object-cover" /> : <span className="text-stone-300 text-[10px] text-center px-1">Sem capa</span>}
+              </div>
+              <div>
+                <label className="text-[11px] text-stone-400 block mb-1">Capa do catálogo</label>
+                <input type="file" accept="image/*" onChange={(e) => onCapaFile(e, setCapa)}
+                  className="text-xs text-stone-500 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-stone-900 file:text-white file:text-[11px]" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] text-stone-400 block mb-1">Subtítulo (aparece no topo do catálogo)</label>
+              <input placeholder="Escolha seus suplementos e envie seu pedido" value={subtitulo} onChange={(e) => setSubtitulo(e.target.value)}
+                className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-[11px] text-stone-400 block mb-1">Cor de destaque</label>
+              <input type="color" value={corDestaque} onChange={(e) => setCorDestaque(e.target.value)}
+                className="w-14 h-9 border border-stone-300 rounded-lg cursor-pointer" />
+            </div>
+          </div>
+          <div className="space-y-4 max-h-96 overflow-auto pr-1">
+            {Object.entries(porCategoria).map(([cat, itens]) => (
+              <div key={cat}>
+                <h4 className="text-xs font-bold uppercase text-stone-400 mb-1.5">{cat}</h4>
+                <div className="space-y-1.5">
+                  {itens.map((p) => (
+                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer ${selecionados[p.id]?.on ? "border-lime-400 bg-lime-50" : "border-stone-200"}`}>
+                      <input type="checkbox" checked={!!selecionados[p.id]?.on}
+                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
+                      <span className="flex-1">{p.emoji} {p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
+                      <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
+                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
+                        className="w-24 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço à vista" />
+                      <input type="number" step="0.01" value={selecionados[p.id]?.parcelado ?? 0}
+                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], parcelado: e.target.value } })}
+                        className="w-24 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço parcelado" />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => salvar("publicado")} className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Publicar catálogo</button>
+            <button onClick={() => salvar("rascunho")} className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar rascunho</button>
+            <button onClick={() => setCriando(false)} className="text-stone-500 text-xs px-4 py-2">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {catalogos.length === 0 && <p className="text-stone-400 text-sm col-span-full">Nenhum catálogo criado ainda.</p>}
+        {catalogos.map((cat) => {
+          const consultoresDoSetor = consultores.filter((c) => c.setor === cat.setor);
+          const publicado = cat.status === "publicado";
+          const inativo = cat.status === "inativo";
+          const rascunho = !publicado && !inativo;
+          const statusInfo = publicado
+            ? { dot: "bg-emerald-500", texto: "text-emerald-600", label: "Publicado" }
+            : inativo
+            ? { dot: "bg-red-400", texto: "text-red-500", label: "Inativo" }
+            : { dot: "bg-stone-300", texto: "text-stone-400", label: "Rascunho" };
+          return (
+            <div key={cat.id} className={`bg-white border rounded-xl p-4 border-l-4 ${publicado ? "border-l-lime-400 border-stone-200" : inativo ? "border-l-red-300 border-stone-200" : "border-l-stone-300 border-stone-200"} ${inativo ? "opacity-70" : ""}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg border border-dashed border-stone-300 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
+                  {cat.capa ? <img src={cat.capa} alt="Capa" className="w-full h-full object-cover" /> : <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.corDestaque || CATALOGO_COR_PADRAO }} />}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-stone-400">{SETORES[cat.setor]}</div>
+                  <div className="font-bold text-sm truncate">{cat.nome}</div>
+                </div>
+              </div>
+              <div className="text-xs text-stone-400 mt-2">{cat.itens.length} produtos</div>
+              <div className="flex items-center gap-1.5 mt-2.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dot}`} />
+                <span className={`text-[10px] font-bold uppercase tracking-wide ${statusInfo.texto}`}>{statusInfo.label}</span>
+              </div>
+              <div className="flex gap-1.5 mt-3 flex-wrap">
+                {rascunho && (
+                  <button onClick={() => publicar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">Publicar</button>
+                )}
+                {publicado && (
+                  <>
+                    <button onClick={() => setExpandido(expandido === cat.id ? null : cat.id)}
+                      className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
+                      {expandido === cat.id ? "Ocultar" : "Links"}
+                    </button>
+                    <button onClick={() => { if (confirm(`Desativar "${cat.nome}"? Os links já enviados deixam de funcionar e ele some do painel dos consultores.`)) desativar(cat.id); }}
+                      className="text-[11px] font-bold uppercase tracking-wide border border-red-200 text-red-600 rounded-md px-2.5 py-1.5 hover:bg-red-50">
+                      Desativar
+                    </button>
+                  </>
+                )}
+                {inativo && (
+                  <button onClick={() => reativar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-emerald-200 text-emerald-700 rounded-md px-2.5 py-1.5 hover:bg-emerald-50">
+                    Reativar
+                  </button>
+                )}
+                <button onClick={() => setEditandoCapaId(editandoCapaId === cat.id ? null : cat.id)}
+                  className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
+                  {editandoCapaId === cat.id ? "Fechar" : "Editar capa"}
+                </button>
+              </div>
+
+              {editandoCapaId === cat.id && (
+                <CatalogoCapaForm catalogo={cat} onSalvar={(dados) => salvarCapaEdicao(cat.id, dados)} onCancelar={() => setEditandoCapaId(null)} />
+              )}
+
+              {expandido === cat.id && publicado && (
+                <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
+                  {consultoresDoSetor.length === 0 && <p className="text-[11px] text-stone-400">Nenhum consultor nesse setor.</p>}
+                  {consultoresDoSetor.map((c) => {
+                    const link = `${linkBase()}#/c/${cat.id}/${c.id}`;
+                    return (
+                      <div key={c.id} className="text-[11px] bg-stone-50 rounded-md px-2 py-1.5">
+                        <div className="font-semibold mb-1">{c.nome}</div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => { navigator.clipboard?.writeText(link); setCopiado(c.id); setTimeout(() => setCopiado(null), 1200); }}
+                            className="inline-flex items-center gap-1 text-stone-500 hover:text-stone-900">
+                            {copiado === c.id ? <Check size={11} /> : <Copy size={11} />} {copiado === c.id ? "Copiado" : "Link"}
+                          </button>
+                          <button onClick={() => onSimular(cat.id, c.id)} className="inline-flex items-center gap-1 text-lime-700 hover:text-lime-900 font-semibold">
+                            <Eye size={11} /> Simular
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CatalogoCapaForm({ catalogo, onSalvar, onCancelar }) {
+  const [capa, setCapa] = useState(catalogo.capa || "");
+  const [subtitulo, setSubtitulo] = useState(catalogo.subtitulo || "");
+  const [corDestaque, setCorDestaque] = useState(catalogo.corDestaque || CATALOGO_COR_PADRAO);
+
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCapa(await fileToDataUrl(file));
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-stone-100 space-y-3">
+      <div className="flex items-center gap-3">
+        <div className="w-16 h-16 rounded-lg border border-dashed border-stone-300 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
+          {capa ? <img src={capa} alt="Capa" className="w-full h-full object-cover" /> : <span className="text-stone-300 text-[10px] text-center px-1">Sem capa</span>}
+        </div>
+        <input type="file" accept="image/*" onChange={onFile}
+          className="text-xs text-stone-500 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-stone-900 file:text-white file:text-[11px]" />
+      </div>
+      <input placeholder="Subtítulo (aparece no topo do catálogo)" value={subtitulo} onChange={(e) => setSubtitulo(e.target.value)}
+        className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+      <div className="flex items-center gap-2">
+        <label className="text-[11px] text-stone-400">Cor de destaque</label>
+        <input type="color" value={corDestaque} onChange={(e) => setCorDestaque(e.target.value)}
+          className="w-12 h-8 border border-stone-300 rounded-lg cursor-pointer" />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => onSalvar({ capa, subtitulo, corDestaque })}
+          className="bg-neutral-950 text-white text-[11px] font-bold uppercase tracking-wide px-3.5 py-1.5 rounded-md">Salvar</button>
+        <button onClick={onCancelar} className="text-stone-500 text-[11px] px-3.5 py-1.5">Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+// --- Painel > Produtos ---
+function ProdutosSection({ produtos, setProdutos, envios }) {
+  const [editing, setEditing] = useState(null);
+  const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
+    marca: "", precoDe: "", badges: [], notaPromo: "",
+    precos: { primeira: { vista: "", parcelado: "" }, farm: { vista: "", parcelado: "" } } };
+
+  const vezesPedido = useMemo(() => {
+    const m = {};
+    envios.forEach((e) => (e.pedidoDetalhe?.itens || []).forEach((it) => { m[it.produtoId] = (m[it.produtoId] || 0) + it.quantidade; }));
+    return m;
+  }, [envios]);
+
+  function salvar(prod) {
+    if (prod.id) setProdutos(produtos.map((p) => (p.id === prod.id ? prod : p)));
+    else setProdutos([...produtos, { ...prod, id: `p_${Date.now()}` }]);
+    setEditing(null);
+  }
+  function remover(id) { if (confirm("Remover este produto?")) setProdutos(produtos.filter((p) => p.id !== id)); }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Produtos</h2>
+        <button onClick={() => setEditing(blank)}
+          className="inline-flex items-center gap-1.5 bg-lime-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-lime-300">
+          <Plus size={14} /> Novo produto
+        </button>
+      </div>
+
+      {editing && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={() => setEditing(null)} />}
+
+      <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-4 py-2.5 font-bold w-10"></th>
+              <th className="text-left px-4 py-2.5 font-bold">Produto</th>
+              <th className="text-left px-4 py-2.5 font-bold">Categoria</th>
+              <th className="text-right px-4 py-2.5 font-bold">Preço (1ª / Farm)</th>
+              <th className="text-right px-4 py-2.5 font-bold">Vezes pedido</th>
+              <th className="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {produtos.map((p) => (
+              <tr key={p.id} className="border-t border-stone-100">
+                <td className="px-4 py-2.5">
+                  {p.imagem ? (
+                    <div className="w-8 h-8 rounded-md bg-stone-100 flex items-center justify-center overflow-hidden">
+                      <img src={p.imagem} alt={p.nome} className="w-full h-full object-contain" />
+                    </div>
+                  ) : (
+                    <span className="text-xl">{p.emoji}</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5">
+                  <div className="font-semibold">{p.nome}</div>
+                  <div className="text-[11px] text-stone-400">{p.gramatura}</div>
+                </td>
+                <td className="px-4 py-2.5 text-stone-500">{p.categoria}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-xs">{formatBRL(p.precos?.primeira?.vista)} / {formatBRL(p.precos?.farm?.vista)}</td>
+                <td className="px-4 py-2.5 text-right font-mono">{vezesPedido[p.id] || 0}</td>
+                <td className="px-4 py-2.5">
+                  <div className="flex justify-end gap-1">
+                    <button onClick={() => setEditing(p)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
+                    <button onClick={() => remover(p.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {produtos.length === 0 && <tr><td colSpan={6} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto cadastrado.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ProdutoForm({ inicial, onSalvar, onCancelar }) {
+  const [f, setF] = useState(inicial);
+  const setPreco = (setor, tipo, val) => setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], [tipo]: val } } });
+  const toggleBadge = (b) => setF({ ...f, badges: f.badges?.includes(b) ? f.badges.filter((x) => x !== b) : [...(f.badges || []), b] });
+  async function onImagemFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    setF((cur) => ({ ...cur, imagem: dataUrl }));
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSalvar({ ...f, precoDe: Number(f.precoDe) || 0, precos: {
+      primeira: { vista: Number(f.precos.primeira.vista) || 0, parcelado: Number(f.precos.primeira.parcelado) || 0 },
+      farm: { vista: Number(f.precos.farm.vista) || 0, parcelado: Number(f.precos.farm.parcelado) || 0 },
+    } }); }}
+      className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
+      <div className="grid sm:grid-cols-4 gap-3">
+        <input required placeholder="Nome do produto" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })}
+          className="sm:col-span-2 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <input placeholder="Gramatura" value={f.gramatura} onChange={(e) => setF({ ...f, gramatura: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <input list="cats" placeholder="Categoria" value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <datalist id="cats">{CATEGORIA_SUGESTOES.map((c) => <option key={c} value={c} />)}</datalist>
+      </div>
+      <textarea placeholder="Descrição" value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })}
+        className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" rows={2} />
+      <div className="flex items-center gap-3 bg-stone-50 rounded-lg p-3">
+        <div className="w-14 h-14 rounded-lg border border-dashed border-stone-300 bg-white overflow-hidden flex items-center justify-center shrink-0">
+          {f.imagem ? <img src={f.imagem} alt="Produto" className="w-full h-full object-contain" /> : <span className="text-2xl">{f.emoji}</span>}
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Foto do produto (opcional — sem foto, usa o ícone)</label>
+          <div className="flex items-center gap-2">
+            <input type="file" accept="image/*" onChange={onImagemFile}
+              className="text-xs text-stone-500 file:mr-2 file:py-1 file:px-2 file:rounded-md file:border-0 file:bg-stone-900 file:text-white file:text-[11px]" />
+            {f.imagem && <button type="button" onClick={() => setF({ ...f, imagem: "" })} className="text-[11px] text-stone-400 hover:text-red-600">Remover</button>}
+          </div>
+        </div>
+      </div>
+      <div className="grid sm:grid-cols-4 gap-3">
+        <input placeholder="Ícone (emoji)" value={f.emoji} onChange={(e) => setF({ ...f, emoji: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <input placeholder="Marca (opcional)" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <input type="number" step="0.01" placeholder="Preço 'De' — opcional" value={f.precoDe} onChange={(e) => setF({ ...f, precoDe: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Preço riscado, só pra comparação visual" />
+        <input placeholder="Nota promocional (opcional)" value={f.notaPromo} onChange={(e) => setF({ ...f, notaPromo: e.target.value })}
+          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label className="text-[11px] text-stone-400 block mb-1.5">Selos (aparecem na página do cliente)</label>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(BADGE_CONFIG).map(([key, cfg]) => (
+            <button key={key} type="button" onClick={() => toggleBadge(key)}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${f.badges?.includes(key) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500"}`}>
+              {cfg.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-4 pt-2">
+        {["primeira", "farm"].map((setor) => (
+          <div key={setor} className="bg-stone-50 rounded-lg p-3">
+            <div className="text-xs font-bold text-stone-500 mb-2">{SETORES[setor]}</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-stone-400">À vista (R$)</label>
+                <input type="number" step="0.01" value={f.precos[setor].vista} onChange={(e) => setPreco(setor, "vista", e.target.value)}
+                  className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+              </div>
+              <div>
+                <label className="text-[11px] text-stone-400">Parcelado (R$)</label>
+                <input type="number" step="0.01" value={f.precos[setor].parcelado} onChange={(e) => setPreco(setor, "parcelado", e.target.value)}
+                  className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2 pt-1">
+        <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar produto</button>
+        <button type="button" onClick={onCancelar} className="text-stone-500 text-sm px-4 py-2">Cancelar</button>
+      </div>
+    </form>
+  );
+}
+
+// --- Consultores ---
+function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) {
+  const [editing, setEditing] = useState(null);
+  const blank = { nome: "", email: "", whatsapp: "", setor: "farm", senha: "1234" };
+
+  function salvar(c) {
+    // Edição sem preencher senha = mantém a senha atual (o backend nunca devolve a senha salva).
+    const registro = c.senha ? c : { ...c, senha: undefined };
+    if (c.id) setConsultores(consultores.map((x) => (x.id === c.id ? registro : x)));
+    else setConsultores([...consultores, { ...registro, id: `c_${Date.now()}` }]);
+    setEditing(null);
+  }
+  function remover(id) { if (confirm("Remover este consultor?")) setConsultores(consultores.filter((x) => x.id !== id)); }
+
+  return (
+    <div>
+      <div className="flex justify-end mb-3">
+        <button onClick={() => setEditing(blank)}
+          className="inline-flex items-center gap-1.5 bg-lime-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-lime-300">
+          <Plus size={14} /> Novo consultor
+        </button>
+      </div>
+
+      {editing && (
+        <form onSubmit={(e) => { e.preventDefault(); salvar(editing); }}
+          className="bg-white border border-stone-200 rounded-xl p-4 mb-4 grid sm:grid-cols-5 gap-3 items-end">
+          <input required placeholder="Nome" value={editing.nome} onChange={(e) => setEditing({ ...editing, nome: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <input placeholder="E-mail" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <input required placeholder="WhatsApp (DDD)" value={editing.whatsapp} onChange={(e) => setEditing({ ...editing, whatsapp: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <select value={editing.setor} onChange={(e) => setEditing({ ...editing, setor: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm">
+            <option value="farm">Farm</option>
+            <option value="primeira">1º Compra</option>
+          </select>
+          <input placeholder={editing.id ? "Nova senha (deixe em branco p/ manter)" : "Senha"} value={editing.senha || ""}
+            onChange={(e) => setEditing({ ...editing, senha: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <div className="sm:col-span-5 flex gap-2">
+            <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar</button>
+            <button type="button" onClick={() => setEditing(null)} className="text-stone-500 text-sm px-4 py-2">Cancelar</button>
+          </div>
+        </form>
+      )}
+
+      <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-4 py-2.5 font-bold">Consultor</th>
+              <th className="text-left px-4 py-2.5 font-bold">E-mail</th>
+              <th className="text-left px-4 py-2.5 font-bold">Setor</th>
+              <th className="text-left px-4 py-2.5 font-bold">Catálogos</th>
+              <th className="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {consultores.map((c) => {
+              const qtdCatalogos = catalogos.filter((cat) => cat.setor === c.setor && cat.status === "publicado").length;
+              return (
+                <tr key={c.id} className="border-t border-stone-100">
+                  <td className="px-4 py-2.5 font-semibold">{c.nome}</td>
+                  <td className="px-4 py-2.5 text-stone-500">{c.email || "—"}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${c.setor === "farm" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{SETORES[c.setor]}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-stone-500">{qtdCatalogos} catálogos</td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => setEditing(c)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
+                      <button onClick={() => remover(c.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rastreamento (compartilhado entre Gerente=todos e Consultor=próprio)
+// ---------------------------------------------------------------------------
+function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsultorId, onSincronizar, sincronizando }) {
+  const [filtroConsultor, setFiltroConsultor] = useState("todos");
+  const [filtroCatalogo, setFiltroCatalogo] = useState("todos");
+  const [filtroStatus, setFiltroStatus] = useState("todos");
+
+  const consultoresEscopo = escopo === "proprio" ? consultores.filter((c) => c.id === apenasConsultorId) : consultores;
+  const idsEscopo = new Set(consultoresEscopo.map((c) => c.id));
+
+  const filtrados = envios.filter((e) => {
+    if (!idsEscopo.has(e.consultorId)) return false;
+    if (filtroConsultor !== "todos" && e.consultorId !== filtroConsultor) return false;
+    if (filtroCatalogo !== "todos" && e.catalogoId !== filtroCatalogo) return false;
+    if (filtroStatus === "nao_visualizou" && e.visualizadoEm) return false;
+    if (filtroStatus === "visualizou" && !e.visualizadoEm) return false;
+    if (filtroStatus === "pediu" && !e.pedidoEm) return false;
+    return true;
+  });
+
+  const linksEnviados = filtrados.length;
+  const naoVisualizaram = filtrados.filter((e) => !e.visualizadoEm).length;
+  const visualizaram = filtrados.filter((e) => e.visualizadoEm).length;
+  const adicionaram = filtrados.filter((e) => e.carrinhoEm).length;
+  const pedidos = filtrados.filter((e) => e.pedidoEm).length;
+  const taxaAbertura = pct(visualizaram, linksEnviados);
+  const taxaConversao = pct(pedidos, linksEnviados);
+
+  const ranking = useMemo(() => {
+    const porCatalogo = {};
+    filtrados.forEach((e) => { (porCatalogo[e.catalogoId] = porCatalogo[e.catalogoId] || []).push(e); });
+    return Object.entries(porCatalogo).map(([catalogoId, lista]) => {
+      const cat = catalogos.find((c) => c.id === catalogoId);
+      return { catalogo: cat, enviados: lista.length, pedidos: lista.filter((e) => e.pedidoEm).length,
+        conversao: pct(lista.filter((e) => e.pedidoEm).length, lista.length) };
+    }).filter((r) => r.catalogo).sort((a, b) => b.conversao - a.conversao).slice(0, 4);
+  }, [filtrados, catalogos]);
+
+  const porConsultor = useMemo(() => {
+    return consultoresEscopo.map((c) => {
+      const lista = filtrados.filter((e) => e.consultorId === c.id);
+      const viram = lista.filter((e) => e.visualizadoEm).length;
+      const ped = lista.filter((e) => e.pedidoEm).length;
+      const semRetorno = lista.some((e) => !e.visualizadoEm && Date.now() - e.criadoEm > 2 * DIA_MS);
+      return { consultor: c, clientes: lista.length, viram, pedidos: ped,
+        abertura: pct(viram, lista.length), conversao: pct(ped, lista.length),
+        followUp: lista.length === 0 ? "—" : semRetorno ? "Fazer contato" : "OK" };
+    }).sort((a, b) => b.pedidos - a.pedidos);
+  }, [consultoresEscopo, filtrados]);
+
+  return (
+    <>
+      <Hero title="Rastreamento" stats={[
+        { label: "Links enviados", value: linksEnviados },
+        { label: "Taxa de abertura", value: `${taxaAbertura}%`, color: "text-sky-400" },
+        { label: "Taxa de conversão", value: `${taxaConversao}%`, color: "text-emerald-400" },
+      ]} />
+
+      <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+        <div className="flex flex-wrap gap-3 items-end bg-white border border-stone-200 rounded-xl p-3.5">
+          <div className="flex items-center gap-1.5 text-stone-400 text-xs font-bold uppercase tracking-wide pr-1"><Filter size={13} /> Filtros</div>
+          {escopo === "todos" && (
+            <select value={filtroConsultor} onChange={(e) => setFiltroConsultor(e.target.value)} className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs">
+              <option value="todos">Todos os consultores</option>
+              {consultoresEscopo.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          )}
+          <select value={filtroCatalogo} onChange={(e) => setFiltroCatalogo(e.target.value)} className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs">
+            <option value="todos">Todos os catálogos</option>
+            {catalogos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </select>
+          <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} className="border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs">
+            <option value="todos">Todos os status</option>
+            <option value="nao_visualizou">Não visualizaram</option>
+            <option value="visualizou">Visualizaram</option>
+            <option value="pediu">Enviaram pedido</option>
+          </select>
+          <div className="ml-auto flex items-center gap-3">
+            {(filtroConsultor !== "todos" || filtroCatalogo !== "todos" || filtroStatus !== "todos") && (
+              <button onClick={() => { setFiltroConsultor("todos"); setFiltroCatalogo("todos"); setFiltroStatus("todos"); }}
+                className="text-xs font-bold uppercase tracking-wide text-stone-500 hover:text-stone-900">Limpar filtros</button>
+            )}
+            {onSincronizar && (
+              <button onClick={onSincronizar} disabled={sincronizando}
+                className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50 disabled:opacity-50">
+                <RefreshCw size={13} className={sincronizando ? "animate-spin" : ""} /> {sincronizando ? "Atualizando…" : "Atualizar"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">Resumo geral — {linksEnviados} clientes</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <ResumoCard value={linksEnviados} label="Links enviados" color="text-stone-900" />
+            <ResumoCard value={naoVisualizaram} label="Não visualizaram" color="text-stone-400" />
+            <ResumoCard value={visualizaram} label="Visualizaram" color="text-sky-600" />
+            <ResumoCard value={adicionaram} label="Adicionaram" color="text-amber-600" />
+            <ResumoCard value={pedidos} label="Enviaram pedido" color="text-emerald-600" />
+          </div>
+        </div>
+
+        <div>
+          <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">Funil de conversão</h2>
+          <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-4">
+            <FunilBar label="Visualizaram" valor={visualizaram} total={linksEnviados} cor="bg-sky-500" />
+            <FunilBar label="Adicionaram" valor={adicionaram} total={linksEnviados} cor="bg-amber-500" />
+            <FunilBar label="Enviaram pedido" valor={pedidos} total={linksEnviados} cor="bg-emerald-500" />
+          </div>
+        </div>
+
+        {ranking.length > 0 && (
+          <div>
+            <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">Ranking de catálogos — por taxa de conversão</h2>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {ranking.map((r, i) => (
+                <div key={r.catalogo.id} className="bg-white border border-stone-200 rounded-xl p-4">
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-stone-400">
+                    <span>{SETORES[r.catalogo.setor]}</span>
+                    {i === 0 && <span className="text-lime-600">1º lugar</span>}
+                  </div>
+                  <div className="font-bold text-sm mt-1">{r.catalogo.nome}</div>
+                  <div className="mt-3 space-y-1.5 text-xs">
+                    <div className="flex justify-between"><span className="text-stone-400">Taxa de conversão</span><span className="font-mono font-bold">{r.conversao}%</span></div>
+                    <div className="flex justify-between"><span className="text-stone-400">Clientes / pedidos</span><span className="font-mono">{r.enviados} / {r.pedidos}</span></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">Acompanhamento por consultor</h2>
+          <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+                <tr>
+                  <th className="text-left px-4 py-2.5 font-bold">Consultor</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Clientes</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Viram</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Pedidos</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Abertura</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Conversão</th>
+                  <th className="text-right px-4 py-2.5 font-bold">Follow-up</th>
+                </tr>
+              </thead>
+              <tbody>
+                {porConsultor.map((l) => (
+                  <tr key={l.consultor.id} className="border-t border-stone-100">
+                    <td className="px-4 py-2.5">
+                      <div className="font-semibold">{l.consultor.nome}</div>
+                      <div className="text-[11px] text-stone-400">{SETORES[l.consultor.setor]}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono">{l.clientes}</td>
+                    <td className="px-4 py-2.5 text-right font-mono">{l.viram}</td>
+                    <td className="px-4 py-2.5 text-right font-mono">{l.pedidos}</td>
+                    <td className="px-4 py-2.5 text-right font-mono">{l.abertura}%</td>
+                    <td className="px-4 py-2.5 text-right font-mono">{l.conversao}%</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${l.followUp === "Fazer contato" ? "bg-red-100 text-red-700" : l.followUp === "OK" ? "bg-emerald-100 text-emerald-700" : "text-stone-300"}`}>{l.followUp}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {linksEnviados === 0 && (
+          <div className="bg-white border border-stone-200 rounded-xl py-10 text-center text-stone-400 text-sm">
+            Nenhum cliente encontrado com os filtros aplicados.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ResumoCard({ value, label, color }) {
+  return (
+    <div className="bg-white border border-stone-200 rounded-xl p-4">
+      <div className={`font-black text-2xl ${color}`}>{value}</div>
+      <div className="text-[10px] text-stone-400 uppercase tracking-wide mt-1">{label}</div>
+    </div>
+  );
+}
+
+function FunilBar({ label, valor, total, cor }) {
+  const p = pct(valor, total);
+  return (
+    <div>
+      <div className="flex justify-between text-sm mb-1.5"><span>{label}</span><span className="font-mono font-semibold">{valor} ({p}%)</span></div>
+      <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
+        <div className={`h-full ${cor} rounded-full transition-all`} style={{ width: `${p}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Consultor
+// ---------------------------------------------------------------------------
+function ConsultorPanel({ consultor, catalogos, envios, onCriarEnvio, onLogout, onSimular, onAbrirEnvio, onSincronizar, sincronizando }) {
+  const [tab, setTab] = useState("painel");
+  const tabs = [{ id: "painel", label: "Painel" }, { id: "desempenho", label: "Desempenho" }];
+  const meusCatalogos = catalogos.filter((c) => c.setor === consultor.setor && c.status === "publicado");
+  const meusEnvios = envios.filter((e) => e.consultorId === consultor.id);
+
+  return (
+    <div>
+      <TopNav tabs={tabs} current={tab} onNav={setTab} roleLabel={`Consultor · ${SETORES[consultor.setor]}`} onLogout={onLogout} />
+
+      {tab === "painel" && (
+        <>
+          <Hero title={`Olá, ${consultor.nome.split(" ")[0]}`} stats={[
+            { label: "Catálogos", value: meusCatalogos.length },
+            { label: "Clientes", value: meusEnvios.length },
+            { label: "Pedidos", value: meusEnvios.filter((e) => e.pedidoEm).length, color: "text-emerald-400" },
+          ]} />
+          <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+            {meusCatalogos.length === 0 && <p className="text-stone-400 text-sm">Nenhum catálogo publicado pro seu setor ainda.</p>}
+            {meusCatalogos.map((cat) => (
+              <CatalogoConsultorCard key={cat.id} catalogo={cat} consultor={consultor}
+                envios={meusEnvios.filter((e) => e.catalogoId === cat.id)}
+                onCriarEnvio={onCriarEnvio} onSimular={() => onSimular(cat.id)} onAbrirEnvio={(envioId) => onAbrirEnvio(cat.id, envioId)} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab === "desempenho" && (
+        <RastreamentoView consultores={[consultor]} catalogos={catalogos} envios={envios} escopo="proprio" apenasConsultorId={consultor.id}
+          onSincronizar={onSincronizar} sincronizando={sincronizando} />
+      )}
+    </div>
+  );
+}
+
+function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSimular, onAbrirEnvio }) {
+  const [novo, setNovo] = useState(false);
+  const [nomeCliente, setNomeCliente] = useState("");
+  const [telCliente, setTelCliente] = useState("");
+  const [copiado, setCopiado] = useState(null);
+
+  function registrar(e) {
+    e.preventDefault();
+    if (!nomeCliente.trim()) return;
+    onCriarEnvio(catalogo.id, consultor.id, nomeCliente.trim(), telCliente.trim());
+    setNomeCliente(""); setTelCliente(""); setNovo(false);
+  }
+
+  function statusDe(env) {
+    if (env.pedidoEm) return { label: "Pediu", cls: "bg-emerald-100 text-emerald-700" };
+    if (env.carrinhoEm) return { label: "No carrinho", cls: "bg-amber-100 text-amber-700" };
+    if (env.visualizadoEm) return { label: "Visualizou", cls: "bg-sky-100 text-sky-700" };
+    return { label: "Aguardando", cls: "bg-stone-100 text-stone-500" };
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 rounded-xl p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="font-bold text-sm">{catalogo.nome}</div>
+          <div className="text-[11px] text-stone-400">{catalogo.itens.length} produtos · {SETORES[catalogo.setor]}</div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onSimular} className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
+            <Eye size={13} /> Pré-visualizar
+          </button>
+          <button onClick={() => setNovo(!novo)} className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide bg-lime-400 text-neutral-950 rounded-md px-2.5 py-1.5 hover:bg-lime-300">
+            <UserPlus size={13} /> Registrar envio
+          </button>
+        </div>
+      </div>
+
+      {novo && (
+        <form onSubmit={registrar} className="mt-3 pt-3 border-t border-stone-100 flex flex-wrap gap-2 items-center">
+          <input required placeholder="Nome do cliente" value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)}
+            className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]" />
+          <input placeholder="Telefone (opcional)" value={telCliente} onChange={(e) => setTelCliente(e.target.value)}
+            className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm w-44" />
+          <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-md">Gerar link</button>
+        </form>
+      )}
+
+      {envios.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
+          {envios.map((env) => {
+            const s = statusDe(env);
+            const link = `${linkBase()}#/c/${catalogo.id}/${consultor.id}/${env.id}`;
+            return (
+              <div key={env.id} className="flex items-center justify-between gap-2 bg-stone-50 rounded-lg px-3 py-2 text-xs">
+                <span className="font-medium w-32 truncate">{env.clienteNome}</span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
+                <span className="font-mono text-stone-400 truncate flex-1">{link}</span>
+                <button onClick={() => { navigator.clipboard?.writeText(link); setCopiado(env.id); setTimeout(() => setCopiado(null), 1200); }}
+                  className="inline-flex items-center gap-1 text-stone-500 hover:text-stone-900 shrink-0">
+                  {copiado === env.id ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+                <button onClick={() => onAbrirEnvio(env.id)} className="inline-flex items-center gap-1 text-lime-700 hover:text-lime-900 font-semibold shrink-0">
+                  <Eye size={12} /> Ver
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo público (cliente) — vitrine escura, estilo loja online
+// ---------------------------------------------------------------------------
+function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onSair }) {
+  const [carrinho, setCarrinho] = useState({});
+  const [showCart, setShowCart] = useState(false);
+  const [busca, setBusca] = useState("");
+  const [categoriaFiltro, setCategoriaFiltro] = useState("todas");
+  const [showFiltros, setShowFiltros] = useState(false);
+  const [badgesFiltro, setBadgesFiltro] = useState([]);
+  const [modalItem, setModalItem] = useState(null);
+  const registrouVisita = useRef(false);
+  const registrouCarrinho = useRef(false);
+  const gradeRef = useRef(null);
+
+  useEffect(() => {
+    if (!registrouVisita.current && catalogo && consultor) { registrouVisita.current = true; onPrimeiraVisualizacao(); }
+  }, [catalogo, consultor]);
+
+  if (!catalogo || !consultor) {
+    return (
+      <div className="min-h-[500px] bg-neutral-950 flex flex-col items-center justify-center text-center px-6">
+        <p className="text-stone-400 text-sm mb-3">Este link não é mais válido ou o catálogo foi removido.</p>
+        {onSair && <button onClick={onSair} className="text-sm text-white underline">Voltar</button>}
+      </div>
+    );
+  }
+
+  const produtosMap = Object.fromEntries(produtos.map((p) => [p.id, p]));
+  const itensValidos = catalogo.itens.filter((it) => produtosMap[it.produtoId]).map((it) => ({ ...it, produto: produtosMap[it.produtoId] }));
+  const categoriasPresentes = [...new Set(itensValidos.map((it) => it.produto.categoria || "Outros"))];
+  const accent = catalogo.corDestaque || CATALOGO_COR_PADRAO;
+
+  const itensFiltrados = itensValidos.filter((it) => {
+    if (categoriaFiltro !== "todas" && (it.produto.categoria || "Outros") !== categoriaFiltro) return false;
+    if (busca.trim() && !it.produto.nome.toLowerCase().includes(busca.trim().toLowerCase())) return false;
+    if (badgesFiltro.length > 0 && !badgesFiltro.some((b) => (it.produto.badges || []).includes(b))) return false;
+    return true;
+  });
+
+  const porBadge = (chave) => itensFiltrados.filter((it) => (it.produto.badges || []).includes(chave));
+  const secoesCuradas = [
+    { chave: "marca_exclusiva", titulo: "Marcas Exclusivas", desc: "Curadoria HP para destacar oportunidades com maior força comercial.", grad: "from-amber-900 via-orange-800 to-neutral-900" },
+    { chave: "lancamento", titulo: "Lançamentos", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-sky-900 via-blue-800 to-neutral-900" },
+    { chave: "oferta", titulo: "Ofertas", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-violet-900 via-purple-800 to-neutral-900" },
+    { chave: "mais_vendido", titulo: "Mais Vendidos", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-yellow-800 via-amber-700 to-neutral-900" },
+  ].map((s) => ({ ...s, itens: porBadge(s.chave) })).filter((s) => s.itens.length > 0);
+
+  const qtdTotal = Object.values(carrinho).reduce((s, q) => s + q, 0);
+  const carrinhoItens = Object.entries(carrinho).filter(([, q]) => q > 0).map(([produtoId, quantidade]) => {
+    const item = itensValidos.find((it) => it.produtoId === produtoId);
+    return { produtoId, quantidade, precoVista: item.precoVista, nome: produtosMap[produtoId].nome, emoji: produtosMap[produtoId].emoji, imagem: produtosMap[produtoId].imagem };
+  });
+  const total = carrinhoItens.reduce((s, it) => s + it.precoVista * it.quantidade, 0);
+
+  function alterarQtd(produtoId, delta) {
+    setCarrinho((c) => {
+      const atual = c[produtoId] || 0; const novo = Math.max(0, atual + delta);
+      return { ...c, [produtoId]: novo };
+    });
+    if (delta > 0 && !registrouCarrinho.current) { registrouCarrinho.current = true; onAdicionouCarrinho(); }
+  }
+
+  function enviarPedido() {
+    if (carrinhoItens.length === 0) return;
+    const linhas = carrinhoItens.map((it) => `• ${it.nome} — Qtd: ${it.quantidade} — ${formatBRL(it.precoVista)} un. — Subtotal: ${formatBRL(it.precoVista * it.quantidade)}`).join("\n");
+    const mensagem = `Olá! Gostaria de fazer o seguinte pedido pelo catálogo "${catalogo.nome}":\n\n${linhas}\n\n*Total: ${formatBRL(total)}*`;
+    const url = `https://wa.me/${toWaNumber(consultor.whatsapp)}?text=${encodeURIComponent(mensagem)}`;
+    onPedido({ itens: carrinhoItens, total });
+    window.open(url, "_blank");
+  }
+
+  return (
+    <div className="min-h-[600px] bg-neutral-950 text-white pb-24">
+      {onSair && (
+        <div className="bg-amber-100 text-amber-800 text-xs text-center py-1.5 px-4">
+          {simulate ? "Modo simulação — cliques aqui não são contabilizados." : "Pré-visualização do envio registrado."}{" "}
+          <button onClick={onSair} className="underline font-semibold ml-1">Voltar</button>
+        </div>
+      )}
+
+      {/* Navbar */}
+      <div className="border-b border-white/10 px-6 py-3 flex items-center justify-between">
+        <div className="font-black tracking-tight">HP <span className="text-orange-500">DISTRIBUIDORA</span></div>
+        <span className="text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
+          Catálogo {SETORES[catalogo.setor]}
+        </span>
+      </div>
+
+      {/* Hero */}
+      <div className="px-6 pt-10 pb-8 max-w-6xl mx-auto grid lg:grid-cols-2 gap-8 items-center">
+        <div>
+          <span className="inline-block text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 mb-4 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
+            Catálogo {SETORES[catalogo.setor]}
+          </span>
+          <h1 className="font-black text-4xl sm:text-5xl leading-[1.05]">{catalogo.nome}</h1>
+          <p className="font-semibold text-sm mt-3" style={{ color: accent }}>{catalogo.subtitulo || "Escolha seus suplementos e envie seu pedido"}</p>
+          <p className="text-stone-400 text-sm mt-1">{itensValidos.length} produtos selecionados especialmente pra você, com preço à vista e parcelado.</p>
+          <button onClick={() => gradeRef.current?.scrollIntoView({ behavior: "smooth" })}
+            className="mt-5 transition text-white font-bold text-sm rounded-lg px-5 py-3" style={{ backgroundColor: accent }}>
+            Ver produtos
+          </button>
+          <p className="text-stone-500 text-xs mt-3">Atendido por <span className="text-stone-300 font-semibold">{consultor.nome}</span> — o pedido vai direto pro WhatsApp dele.</p>
+        </div>
+        <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogo.capa ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
+          {catalogo.capa ? (
+            <img src={catalogo.capa} alt={catalogo.nome} className="w-full h-full object-cover" />
+          ) : (
+            <div className="text-center">
+              <div className="font-black text-xl" style={{ color: accent }}>{catalogo.nome}</div>
+              <div className="text-stone-500 text-xs mt-1">HP Distribuidora</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Busca + filtros */}
+      <div ref={gradeRef} className="sticky top-0 z-30 bg-neutral-950/95 backdrop-blur border-y border-white/10 px-6 py-3 scroll-mt-0">
+        <div className="max-w-6xl mx-auto space-y-2.5">
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
+              <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar produto..."
+                className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500/50" />
+            </div>
+            {Object.keys(BADGE_CONFIG).length > 0 && (
+              <button onClick={() => setShowFiltros(!showFiltros)}
+                className={`inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide rounded-lg px-3.5 py-2 border ${showFiltros ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
+                <Filter size={13} /> Filtros
+              </button>
+            )}
+          </div>
+
+          {showFiltros && (
+            <div className="flex flex-wrap gap-1.5 pb-1">
+              {Object.entries(BADGE_CONFIG).map(([key, cfg]) => (
+                <button key={key} onClick={() => setBadgesFiltro((b) => b.includes(key) ? b.filter((x) => x !== key) : [...b, key])}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${badgesFiltro.includes(key) ? cfg.cls : "border-white/15 text-stone-400"}`}>
+                  {cfg.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            <button onClick={() => setCategoriaFiltro("todas")}
+              className={`shrink-0 text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-full border ${categoriaFiltro === "todas" ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
+              Todas
+            </button>
+            {categoriasPresentes.map((cat) => (
+              <button key={cat} onClick={() => setCategoriaFiltro(cat)}
+                className={`shrink-0 inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border ${categoriaFiltro === cat ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[cat] || "bg-stone-400"}`} /> {cat}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-6 py-8 space-y-10">
+        {/* Seções curadas */}
+        {secoesCuradas.map((s) => (
+          <div key={s.chave}>
+            <div className={`bg-gradient-to-r ${s.grad} rounded-2xl px-5 py-4 mb-4`}>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Catálogo {SETORES[catalogo.setor]}</span>
+              <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
+              <p className="text-white/60 text-xs mt-1">{s.desc}</p>
+            </div>
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {s.itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={carrinho[it.produtoId] || 0} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+            </div>
+          </div>
+        ))}
+
+        {/* Todos os produtos */}
+        <div>
+          <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
+          {itensFiltrados.length === 0 ? (
+            <p className="text-stone-500 text-sm py-10 text-center">Nenhum produto encontrado com esse filtro.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {itensFiltrados.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={carrinho[it.produtoId] || 0} onAbrir={() => setModalItem(it)} accent={accent} />)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 px-6 py-6 text-center">
+        <p className="text-sm font-bold">HP Distribuidora <span className="text-stone-500 font-normal">· Suplementos pra você vender mais.</span></p>
+        <p className="text-stone-500 text-xs mt-1">Preços e condições conforme este catálogo. Em caso de dúvida, fale com {consultor.nome}.</p>
+      </div>
+
+      {/* Modal de detalhes / adicionar */}
+      {modalItem && (
+        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 px-0 sm:px-4">
+          <div className="bg-neutral-900 border border-white/10 w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl overflow-hidden">
+            <div className="aspect-square bg-gradient-to-br from-white/10 to-transparent border-b border-dashed flex items-center justify-center relative overflow-hidden" style={{ borderColor: hexToRgba(accent, 0.3) }}>
+              {modalItem.produto.imagem ? (
+                <img src={modalItem.produto.imagem} alt={modalItem.produto.nome} className="w-full h-full object-contain p-6" />
+              ) : (
+                <span className="text-7xl">{modalItem.produto.emoji}</span>
+              )}
+              <button onClick={() => setModalItem(null)} className="absolute top-3 right-3 bg-black/40 rounded-full p-1.5"><X size={16} /></button>
+            </div>
+            <div className="p-5">
+              {modalItem.produto.marca && <div className="text-orange-400 text-[11px] font-bold uppercase tracking-wide">{modalItem.produto.marca}</div>}
+              <h3 className="font-black text-lg mt-0.5">{modalItem.produto.nome}</h3>
+              <div className="text-stone-400 text-xs mt-0.5">{modalItem.produto.gramatura}</div>
+              {modalItem.produto.descricao && <p className="text-stone-300 text-sm mt-2.5">{modalItem.produto.descricao}</p>}
+
+              {(modalItem.produto.badges || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {modalItem.produto.badges.map((b) => BADGE_CONFIG[b] && (
+                    <span key={b} className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${BADGE_CONFIG[b].cls}`}>{BADGE_CONFIG[b].label}</span>
+                  ))}
+                </div>
+              )}
+              {modalItem.produto.notaPromo && <p className="text-amber-400 text-xs mt-2">✦ {modalItem.produto.notaPromo}</p>}
+
+              <div className="mt-4">
+                {modalItem.produto.precoDe > modalItem.precoParcelado && (
+                  <div className="text-stone-500 text-xs line-through">De {formatBRL(modalItem.produto.precoDe)}</div>
+                )}
+                <div className="font-black text-xl">{formatBRL(modalItem.precoParcelado)} <span className="text-stone-400 font-normal text-sm">no cartão</span></div>
+                <div className="text-emerald-400 font-bold text-sm">{formatBRL(modalItem.precoVista)} à vista</div>
+              </div>
+
+              <div className="flex items-center justify-between mt-5 bg-white/5 rounded-full p-1.5">
+                <button onClick={() => alterarQtd(modalItem.produtoId, -1)} disabled={(carrinho[modalItem.produtoId] || 0) === 0}
+                  className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 disabled:opacity-30"><Minus size={15} /></button>
+                <span className="font-mono font-bold text-lg">{carrinho[modalItem.produtoId] || 0}</span>
+                <button onClick={() => alterarQtd(modalItem.produtoId, 1)} className="w-9 h-9 flex items-center justify-center rounded-full" style={{ backgroundColor: accent }}><Plus size={15} /></button>
+              </div>
+              <button onClick={() => setModalItem(null)} className="w-full mt-3 bg-white text-neutral-950 font-bold text-sm rounded-lg py-2.5">
+                {(carrinho[modalItem.produtoId] || 0) > 0 ? "Adicionado ao pedido" : "Fechar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Botão flutuante do carrinho */}
+      {qtdTotal > 0 && !modalItem && (
+        <button onClick={() => setShowCart(true)} style={{ backgroundColor: accent }}
+          className="fixed bottom-5 right-5 z-40 hover:brightness-110 transition text-white font-bold text-sm rounded-full pl-4 pr-5 py-3 flex items-center gap-2 shadow-2xl">
+          <ShoppingCart size={17} /> Meu pedido <span className="bg-white/25 rounded-full text-xs w-5 h-5 flex items-center justify-center">{qtdTotal}</span>
+        </button>
+      )}
+
+      {/* Carrinho */}
+      {showCart && (
+        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50">
+          <div className="bg-neutral-900 border border-white/10 w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+              <h3 className="font-black text-sm uppercase tracking-wide">Seu pedido</h3>
+              <button onClick={() => setShowCart(false)}><X size={18} className="text-stone-400" /></button>
+            </div>
+            <div className="flex-1 overflow-auto px-5 py-3 space-y-1">
+              {carrinhoItens.map((it) => (
+                <div key={it.produtoId} className="flex items-center gap-3 py-2 border-b border-white/5 last:border-0">
+                  <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center text-xl shrink-0 overflow-hidden">
+                    {it.imagem ? <img src={it.imagem} alt={it.nome} className="w-full h-full object-contain" /> : it.emoji}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{it.nome}</div>
+                    <div className="text-xs text-stone-500">Qtd: {it.quantidade} × {formatBRL(it.precoVista)}</div>
+                  </div>
+                  <span className="font-mono text-sm font-bold shrink-0">{formatBRL(it.precoVista * it.quantidade)}</span>
+                  <button onClick={() => setCarrinho((c) => ({ ...c, [it.produtoId]: 0 }))} className="text-stone-600 hover:text-red-400 shrink-0"><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-4 border-t border-white/10">
+              <div className="flex justify-between text-base font-black mb-3"><span>Total</span><span className="font-mono">{formatBRL(total)}</span></div>
+              {simulate && (
+                <p className="text-[11px] text-amber-500 text-center mb-2 font-semibold">⚠ Modo simulação: este pedido não será contabilizado no Rastreamento.</p>
+              )}
+              <button onClick={enviarPedido} style={{ backgroundColor: accent }}
+                className="w-full hover:brightness-110 transition text-white rounded-xl py-3.5 text-sm font-bold flex items-center justify-center gap-2">
+                <Send size={16} /> Fazer pedido via WhatsApp
+              </button>
+              <p className="text-[11px] text-stone-500 text-center mt-2.5">Enviado direto pro WhatsApp de {consultor.nome.split(" ")[0]} pra confirmar com você.</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
+  const p = item.produto;
+  const temDe = p.precoDe > item.precoParcelado;
+  const cor = accent || CATALOGO_COR_PADRAO;
+  return (
+    <button onClick={onAbrir} className={`text-left bg-neutral-900 border rounded-xl overflow-hidden transition ${largura || ""}`} style={{ borderColor: "rgba(255,255,255,0.1)" }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = hexToRgba(cor, 0.5); }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}>
+      <div className="aspect-square m-2.5 rounded-lg border-2 border-dashed bg-white/[0.02] flex items-center justify-center relative overflow-hidden" style={{ width: "calc(100% - 20px)", borderColor: hexToRgba(cor, 0.3) }}>
+        {p.imagem ? <img src={p.imagem} alt={p.nome} className="w-full h-full object-contain p-3" /> : <span className="text-5xl">{p.emoji}</span>}
+        {qtd > 0 && <span className="absolute top-1.5 right-1.5 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: cor }}>{qtd}</span>}
+      </div>
+      <div className="px-3 pb-3">
+        {p.marca && <div className="text-orange-400 text-[10px] font-bold uppercase tracking-wide">{p.marca}</div>}
+        <div className="font-bold text-sm leading-tight mt-0.5">{p.nome}</div>
+        <div className="text-stone-500 text-[11px] mt-0.5">{p.gramatura}</div>
+        <div className="flex items-center gap-1 text-[11px] text-stone-400 mt-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[p.categoria] || "bg-stone-400"}`} /> {p.categoria}
+        </div>
+
+        {(p.badges || []).length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-2">
+            {p.badges.slice(0, 2).map((b) => BADGE_CONFIG[b] && (
+              <span key={b} className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${BADGE_CONFIG[b].cls}`}>{BADGE_CONFIG[b].label}</span>
+            ))}
+          </div>
+        )}
+        {p.notaPromo && <p className="text-amber-400 text-[10px] mt-1.5">✦ {p.notaPromo}</p>}
+
+        <div className="mt-2.5">
+          {temDe && <div className="text-stone-500 text-[10px] line-through">De {formatBRL(p.precoDe)}</div>}
+          <div className="font-black text-sm">{formatBRL(item.precoParcelado)} <span className="text-stone-500 font-normal text-[10px]">no cartão</span></div>
+          <div className="text-emerald-400 font-bold text-xs">{formatBRL(item.precoVista)} à vista</div>
+        </div>
+
+        <div className="mt-2.5 w-full border border-white/15 text-stone-300 text-[11px] font-bold uppercase tracking-wide rounded-lg py-1.5 text-center">
+          Ver detalhes
+        </div>
+      </div>
+    </button>
+  );
+}
