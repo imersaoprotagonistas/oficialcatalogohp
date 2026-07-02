@@ -1,7 +1,7 @@
-import { Router } from "express";
-import { pool } from "../db.js";
-import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
-import { ah } from "../asyncHandler.js";
+const { Router } = require("express");
+const { pool } = require("../db.js");
+const { optionalAuth, requireAuth } = require("../middleware/requireAuth.js");
+const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
@@ -53,4 +53,4 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   res.json(toRow(rows[0]));
 }));
 
-export default router;
+module.exports = router;

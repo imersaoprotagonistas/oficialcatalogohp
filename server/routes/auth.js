@@ -1,7 +1,7 @@
-import { Router } from "express";
-import { pool } from "../db.js";
-import { verificarSenha, gerarToken } from "../auth.js";
-import { ah } from "../asyncHandler.js";
+const { Router } = require("express");
+const { pool } = require("../db.js");
+const { verificarSenha, gerarToken } = require("../auth.js");
+const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
@@ -29,4 +29,4 @@ router.post("/login", ah(async (req, res) => {
   res.status(400).json({ erro: "Papel inválido." });
 }));
 
-export default router;
+module.exports = router;

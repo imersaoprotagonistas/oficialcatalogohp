@@ -1,8 +1,8 @@
-import { Router } from "express";
-import { randomUUID } from "crypto";
-import { pool } from "../db.js";
-import { requireAuth } from "../middleware/requireAuth.js";
-import { ah } from "../asyncHandler.js";
+const { Router } = require("express");
+const { randomUUID } = require("crypto");
+const { pool } = require("../db.js");
+const { requireAuth } = require("../middleware/requireAuth.js");
+const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
@@ -60,4 +60,4 @@ router.delete("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   res.status(204).end();
 }));
 
-export default router;
+module.exports = router;

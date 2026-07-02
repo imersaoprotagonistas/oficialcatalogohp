@@ -1,16 +1,14 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
+require("dotenv/config");
+const express = require("express");
+const cors = require("cors");
+const path = require("path");
 
-import authRoutes from "./routes/auth.js";
-import produtosRoutes from "./routes/produtos.js";
-import consultoresRoutes from "./routes/consultores.js";
-import catalogosRoutes from "./routes/catalogos.js";
-import enviosRoutes from "./routes/envios.js";
+const authRoutes = require("./routes/auth.js");
+const produtosRoutes = require("./routes/produtos.js");
+const consultoresRoutes = require("./routes/consultores.js");
+const catalogosRoutes = require("./routes/catalogos.js");
+const enviosRoutes = require("./routes/envios.js");
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.use(cors());

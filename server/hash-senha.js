@@ -1,6 +1,6 @@
 // Gera o hash da senha do gerente pra colocar em GERENTE_SENHA_HASH no .env.
 // Uso: npm run hash-senha -- "minha-senha"
-import { hashSenha } from "./auth.js";
+const { hashSenha } = require("./auth.js");
 
 const senha = process.argv[2];
 if (!senha) {

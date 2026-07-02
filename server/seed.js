@@ -1,8 +1,8 @@
 // Popula produtos e consultores iniciais no Supabase (mesmos dados que antes viviam
 // em SEED_PRODUTOS / SEED_CONSULTORES no localStorage). Rode com: npm run seed
-import "dotenv/config";
-import { pool } from "./db.js";
-import { hashSenha } from "./auth.js";
+require("dotenv/config");
+const { pool } = require("./db.js");
+const { hashSenha } = require("./auth.js");
 
 const PRODUTOS = [
   { id: "p1", nome: "Whey Protein Concentrado", gramatura: "900g", categoria: "Proteínas",
