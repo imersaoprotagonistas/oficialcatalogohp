@@ -17,6 +17,15 @@ const app = express();
 // o site estiver na raiz do domínio/subdomínio.
 const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/$/, "");
 
+// Evita que qualquer cache (inclusive o cache interno do LiteSpeed, que roda no
+// servidor web e não aparece nas configurações do cPanel) guarde essas respostas.
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.set("X-LiteSpeed-Cache-Control", "no-cache");
+  res.set("Pragma", "no-cache");
+  next();
+});
+
 // DIAGNÓSTICO TEMPORÁRIO — caminho fixo, não depende de query string.
 app.get(`${BASE_PATH}/__debug`, (req, res) => {
   res.json({ ok: true, path: req.path, originalUrl: req.originalUrl, BASE_PATH: process.env.BASE_PATH || null, nodeVersion: process.version });
@@ -33,10 +42,10 @@ app.use(`${BASE_PATH}/api/envios`, enviosRoutes);
 
 // Serve o build do frontend (dist/) quando ele existir, pra rodar tudo num processo só na Turbocloud.
 const distPath = path.join(__dirname, "..", "dist");
-app.use(BASE_PATH || "/", express.static(distPath));
+app.use(BASE_PATH || "/", express.static(distPath, { etag: false, lastModified: false, cacheControl: false }));
 app.get("*", (req, res, next) => {
   if (req.path.startsWith(`${BASE_PATH}/api/`) || req.path === `${BASE_PATH}/__debug`) return next();
-  res.sendFile(path.join(distPath, "index.html"), (err) => { if (err) next(); });
+  res.sendFile(path.join(distPath, "index.html"), { etag: false, lastModified: false, cacheControl: false }, (err) => { if (err) next(); });
 });
 
 app.use((err, req, res, next) => {
