@@ -11,19 +11,26 @@ const enviosRoutes = require("./routes/envios.js");
 
 const app = express();
 
+// Algumas hospedagens (ex: cPanel com "Application URL" numa subpasta, como
+// /catalogohp) encaminham a URL inteira pro Node, sem tirar a subpasta da frente.
+// BASE_PATH deixa a app ciente disso. Deixe em branco (ou não defina) se o site
+// estiver na raiz do domínio/subdomínio.
+const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/$/, "");
+
 app.use(cors());
 app.use(express.json({ limit: "15mb" })); // capas de catálogo vão em base64 no corpo
 
-app.use("/api/auth", authRoutes);
-app.use("/api/produtos", produtosRoutes);
-app.use("/api/consultores", consultoresRoutes);
-app.use("/api/catalogos", catalogosRoutes);
-app.use("/api/envios", enviosRoutes);
+app.use(`${BASE_PATH}/api/auth`, authRoutes);
+app.use(`${BASE_PATH}/api/produtos`, produtosRoutes);
+app.use(`${BASE_PATH}/api/consultores`, consultoresRoutes);
+app.use(`${BASE_PATH}/api/catalogos`, catalogosRoutes);
+app.use(`${BASE_PATH}/api/envios`, enviosRoutes);
 
 // Serve o build do frontend (dist/) quando ele existir, pra rodar tudo num processo só na Turbocloud.
 const distPath = path.join(__dirname, "..", "dist");
-app.use(express.static(distPath));
-app.get(/^(?!\/api\/).*/, (req, res, next) => {
+app.use(BASE_PATH || "/", express.static(distPath));
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith(`${BASE_PATH}/api/`)) return next();
   res.sendFile(path.join(distPath, "index.html"), (err) => { if (err) next(); });
 });
 
