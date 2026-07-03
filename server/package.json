@@ -6,7 +6,8 @@
     "dev": "node --watch index.js",
     "start": "node index.js",
     "seed": "node seed.js",
-    "hash-senha": "node hash-senha.js"
+    "hash-senha": "node hash-senha.js",
+    "version-check": "node version-check.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
