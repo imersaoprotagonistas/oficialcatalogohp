@@ -11,6 +11,14 @@ const enviosRoutes = require("./routes/envios.js");
 
 const app = express();
 
+// DIAGNÓSTICO TEMPORÁRIO — remover depois de descobrir o problema do BASE_PATH.
+app.use((req, res, next) => {
+  if (req.query.debug === "1") {
+    return res.json({ path: req.path, originalUrl: req.originalUrl, baseUrl: req.baseUrl, BASE_PATH: process.env.BASE_PATH || null });
+  }
+  next();
+});
+
 // Algumas hospedagens (ex: cPanel com "Application URL" numa subpasta, como
 // /catalogohp) encaminham a URL inteira pro Node, sem tirar a subpasta da frente.
 // BASE_PATH deixa a app ciente disso. Deixe em branco (ou não defina) se o site
