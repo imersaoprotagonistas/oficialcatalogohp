@@ -28,7 +28,14 @@ app.use((req, res, next) => {
 
 // DIAGNÓSTICO TEMPORÁRIO — caminho fixo, não depende de query string.
 app.get(`${BASE_PATH}/__debug`, (req, res) => {
-  res.json({ ok: true, path: req.path, originalUrl: req.originalUrl, BASE_PATH: process.env.BASE_PATH || null, nodeVersion: process.version });
+  let dbHostPort = null;
+  try {
+    const u = new URL(process.env.DATABASE_URL || "");
+    dbHostPort = `${u.hostname}:${u.port}`;
+  } catch {
+    dbHostPort = "DATABASE_URL ausente ou inválida";
+  }
+  res.json({ ok: true, path: req.path, originalUrl: req.originalUrl, BASE_PATH: process.env.BASE_PATH || null, nodeVersion: process.version, dbHostPort });
 });
 
 app.use(cors());
