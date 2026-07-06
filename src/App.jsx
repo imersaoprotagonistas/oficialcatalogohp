@@ -46,7 +46,7 @@ function calcularPrecoSetor({ de, desconto, custo }) {
 }
 // Formatação condicional da margem: >= 28% verde, entre 27% e 28% amarelo, abaixo de 27% vermelho.
 function corMargem(margemPct) {
-  if (margemPct >= 28) return { dot: "bg-emerald-500", texto: "text-emerald-700", fundo: "bg-emerald-50", borda: "border-emerald-300", label: "Margem saudável" };
+  if (margemPct >= 28) return { dot: "bg-orange-500", texto: "text-orange-700", fundo: "bg-orange-50", borda: "border-orange-300", label: "Margem saudável" };
   if (margemPct >= 27) return { dot: "bg-amber-500", texto: "text-amber-700", fundo: "bg-amber-50", borda: "border-amber-300", label: "Margem no limite" };
   return { dot: "bg-red-500", texto: "text-red-700", fundo: "bg-red-50", borda: "border-red-300", label: "Margem abaixo do limite" };
 }
@@ -335,13 +335,13 @@ function TopNav({ tabs, current, onNav, roleLabel, onLogout }) {
     <header className="bg-neutral-950 text-stone-300">
       <div className="max-w-6xl mx-auto px-6 flex items-center justify-between h-14">
         <div className="font-black tracking-tight text-white text-lg">
-          HP <span className="text-lime-400">DISTRIBUIDORA</span>
+          HP <span className="text-orange-400">DISTRIBUIDORA</span>
         </div>
         <nav className="hidden sm:flex items-center gap-6">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => onNav(t.id)}
               className={`text-xs font-bold uppercase tracking-wide pb-1 border-b-2 transition ${
-                current === t.id ? "text-white border-lime-400" : "text-stone-400 border-transparent hover:text-stone-200"}`}>
+                current === t.id ? "text-white border-orange-400" : "text-stone-400 border-transparent hover:text-stone-200"}`}>
               {t.label}
             </button>
           ))}
@@ -407,17 +407,17 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
     <div className="min-h-[600px] bg-neutral-950 flex items-center justify-center px-4 py-16">
       <div className="w-full max-w-sm">
         <div className="mb-10 text-center">
-          <div className="font-black text-3xl tracking-tighter text-white">HP <span className="text-lime-400">DISTRIBUIDORA</span></div>
+          <div className="font-black text-3xl tracking-tighter text-white">HP <span className="text-orange-400">DISTRIBUIDORA</span></div>
           <p className="text-stone-500 text-xs mt-2 uppercase tracking-wide">Painel de catálogos</p>
         </div>
 
         <div className="flex rounded-lg bg-stone-900 p-1 mb-6">
           <button onClick={() => { setTab("gerente"); setErro(""); }}
-            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "gerente" ? "bg-lime-400 text-neutral-950" : "text-stone-400"}`}>
+            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "gerente" ? "bg-orange-400 text-neutral-950" : "text-stone-400"}`}>
             Gerente
           </button>
           <button onClick={() => { setTab("consultor"); setErro(""); }}
-            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "consultor" ? "bg-lime-400 text-neutral-950" : "text-stone-400"}`}>
+            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "consultor" ? "bg-orange-400 text-neutral-950" : "text-stone-400"}`}>
             Consultor
           </button>
         </div>
@@ -425,22 +425,22 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
         {tab === "gerente" ? (
           <form onSubmit={submitGerente} className="space-y-3">
             <input type="password" placeholder="Senha do gerente" value={senha} onChange={(e) => setSenha(e.target.value)}
-              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400" />
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
             {erro && <p className="text-red-400 text-xs">{erro}</p>}
-            <button type="submit" disabled={enviando} className="w-full bg-lime-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-lime-300 transition disabled:opacity-60">
+            <button type="submit" disabled={enviando} className="w-full bg-orange-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-orange-300 transition disabled:opacity-60">
               {enviando ? "Entrando…" : "Entrar"}
             </button>
           </form>
         ) : (
           <form onSubmit={submitConsultor} className="space-y-3">
             <select value={consultorId} onChange={(e) => setConsultorId(e.target.value)}
-              className="w-full bg-stone-900 border border-stone-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400">
+              className="w-full bg-stone-900 border border-stone-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
               {consultores.map((c) => <option key={c.id} value={c.id}>{c.nome} — {SETORES[c.setor]}</option>)}
             </select>
             <input type="password" placeholder="Sua senha" value={senha} onChange={(e) => setSenha(e.target.value)}
-              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-lime-400" />
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
             {erro && <p className="text-red-400 text-xs">{erro}</p>}
-            <button type="submit" disabled={enviando} className="w-full bg-lime-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-lime-300 transition disabled:opacity-60">
+            <button type="submit" disabled={enviando} className="w-full bg-orange-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-orange-300 transition disabled:opacity-60">
               {enviando ? "Entrando…" : "Entrar"}
             </button>
           </form>
@@ -680,7 +680,10 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
               {totalSelecionados} selecionado{totalSelecionados === 1 ? "" : "s"}
             </span>
           </div>
-          <p className="text-[11px] text-stone-400 -mt-1">Preço por produto: <b>De</b> (opcional, riscado) · <b>Por</b> (no cartão) · <b>À vista</b></p>
+          <p className="text-[11px] text-stone-400 -mt-1">
+            Preço por produto: <b>De</b> (opcional, riscado) · <b>Por</b> (no cartão) · <b>À vista</b> ·
+            bolinha = saúde da margem (verde/amarelo/vermelho) · <b>⚠</b> = preço não bate com a fórmula do produto
+          </p>
           <div className="space-y-4 max-h-96 overflow-auto pr-1">
             {filtro.filtrados.length === 0 && (
               <p className="text-stone-400 text-sm text-center py-6">Nenhum produto encontrado com esse filtro.</p>
@@ -701,19 +704,28 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                       + `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
                       + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
                     return (
-                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-lime-400 bg-lime-50" : "border-stone-200"}`}>
+                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
                       <span className="flex-1 min-w-[140px]">{p.emoji} {p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
-                      <input type="number" step="0.01" value={selecionados[p.id]?.de ?? 0}
-                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], de: e.target.value } })}
-                        className="w-20 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço De (opcional)" />
-                      <input type="number" step="0.01" value={selecionados[p.id]?.parcelado ?? 0}
-                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], parcelado: e.target.value } })}
-                        className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço Por" />
-                      <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
-                        onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
-                        className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço à vista" />
+                      <div className="flex flex-col items-center">
+                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">De</span>
+                        <input type="number" step="0.01" value={selecionados[p.id]?.de ?? 0}
+                          onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], de: e.target.value } })}
+                          className="w-20 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Preço De (opcional)" />
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Por</span>
+                        <input type="number" step="0.01" value={selecionados[p.id]?.parcelado ?? 0}
+                          onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], parcelado: e.target.value } })}
+                          className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço Por" />
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">À vista</span>
+                        <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
+                          onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
+                          className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço à vista" />
+                      </div>
                       <span className={`inline-flex items-center gap-1 shrink-0 ${bate ? "" : "opacity-70"}`} title={dica}>
                         <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
                         {!bate && <span className="text-amber-600 text-xs">⚠</span>}
@@ -784,7 +796,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                   </>
                 )}
                 {inativo && (
-                  <button onClick={() => reativar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-emerald-200 text-emerald-700 rounded-md px-2.5 py-1.5 hover:bg-emerald-50">
+                  <button onClick={() => reativar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-orange-200 text-orange-700 rounded-md px-2.5 py-1.5 hover:bg-orange-50">
                     Reativar
                   </button>
                 )}
@@ -807,7 +819,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                             className="inline-flex items-center gap-1 text-stone-500 hover:text-stone-900">
                             {copiado === c.id ? <Check size={11} /> : <Copy size={11} />} {copiado === c.id ? "Copiado" : "Link"}
                           </button>
-                          <button onClick={() => onSimular(cat.id, c.id)} className="inline-flex items-center gap-1 text-lime-700 hover:text-lime-900 font-semibold">
+                          <button onClick={() => onSimular(cat.id, c.id)} className="inline-flex items-center gap-1 text-orange-700 hover:text-orange-900 font-semibold">
                             <Eye size={11} /> Simular
                           </button>
                         </div>
@@ -854,7 +866,7 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
           Produtos <span className="text-stone-300 font-normal normal-case">({filtro.filtrados.length} de {produtos.length})</span>
         </h2>
         <button onClick={() => setEditing(blank)}
-          className="inline-flex items-center gap-1.5 bg-lime-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-lime-300">
+          className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
           <Plus size={14} /> Novo produto
         </button>
       </div>
@@ -1084,7 +1096,7 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
 
               {(!porBate || !vistaBate) && (
                 <button type="button" onClick={() => usarCalculado(setor)}
-                  className="mt-2 text-[11px] font-bold uppercase tracking-wide text-lime-700 hover:text-lime-900">
+                  className="mt-2 text-[11px] font-bold uppercase tracking-wide text-orange-700 hover:text-orange-900">
                   Usar valores calculados
                 </button>
               )}
@@ -1118,7 +1130,7 @@ function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) 
     <div>
       <div className="flex justify-end mb-3">
         <button onClick={() => setEditing(blank)}
-          className="inline-flex items-center gap-1.5 bg-lime-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-lime-300">
+          className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
           <Plus size={14} /> Novo consultor
         </button>
       </div>
@@ -1161,7 +1173,7 @@ function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) 
                   <td className="px-4 py-2.5 font-semibold">{c.nome}</td>
                   <td className="px-4 py-2.5 text-stone-500">{c.email || "—"}</td>
                   <td className="px-4 py-2.5">
-                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${c.setor === "farm" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{SETORES[c.setor]}</span>
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${c.setor === "farm" ? "bg-orange-100 text-orange-700" : "bg-amber-100 text-amber-700"}`}>{SETORES[c.setor]}</span>
                   </td>
                   <td className="px-4 py-2.5 text-stone-500">{qtdCatalogos} catálogos</td>
                   <td className="px-4 py-2.5">
@@ -1242,7 +1254,7 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
       <Hero title="Rastreamento" stats={[
         { label: "Links enviados", value: linksEnviados },
         { label: "Taxa de abertura", value: `${taxaAbertura}%`, color: "text-sky-400" },
-        { label: "Taxa de conversão", value: `${taxaConversao}%`, color: "text-emerald-400" },
+        { label: "Taxa de conversão", value: `${taxaConversao}%`, color: "text-orange-400" },
       ]} />
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
@@ -1307,7 +1319,7 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
             <ResumoCard value={naoVisualizaram} label="Não visualizaram" color="text-stone-400" />
             <ResumoCard value={visualizaram} label="Visualizaram" color="text-sky-600" />
             <ResumoCard value={adicionaram} label="Adicionaram" color="text-amber-600" />
-            <ResumoCard value={pedidos} label="Enviaram pedido" color="text-emerald-600" />
+            <ResumoCard value={pedidos} label="Enviaram pedido" color="text-orange-600" />
           </div>
         </div>
 
@@ -1316,7 +1328,7 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
           <div className="bg-white border border-stone-200 rounded-xl p-5 space-y-4">
             <FunilBar label="Visualizaram" valor={visualizaram} total={linksEnviados} cor="bg-sky-500" />
             <FunilBar label="Adicionaram" valor={adicionaram} total={linksEnviados} cor="bg-amber-500" />
-            <FunilBar label="Enviaram pedido" valor={pedidos} total={linksEnviados} cor="bg-emerald-500" />
+            <FunilBar label="Enviaram pedido" valor={pedidos} total={linksEnviados} cor="bg-orange-500" />
           </div>
         </div>
 
@@ -1328,7 +1340,7 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
                 <div key={r.catalogo.id} className="bg-white border border-stone-200 rounded-xl p-4">
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-stone-400">
                     <span>{SETORES[r.catalogo.setor]}</span>
-                    {i === 0 && <span className="text-lime-600">1º lugar</span>}
+                    {i === 0 && <span className="text-orange-600">1º lugar</span>}
                   </div>
                   <div className="font-bold text-sm mt-1">{r.catalogo.nome}</div>
                   <div className="mt-3 space-y-1.5 text-xs">
@@ -1369,7 +1381,7 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
                     <td className="px-4 py-2.5 text-right font-mono">{l.abertura}%</td>
                     <td className="px-4 py-2.5 text-right font-mono">{l.conversao}%</td>
                     <td className="px-4 py-2.5 text-right">
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${l.followUp === "Fazer contato" ? "bg-red-100 text-red-700" : l.followUp === "OK" ? "bg-emerald-100 text-emerald-700" : "text-stone-300"}`}>{l.followUp}</span>
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${l.followUp === "Fazer contato" ? "bg-red-100 text-red-700" : l.followUp === "OK" ? "bg-orange-100 text-orange-700" : "text-stone-300"}`}>{l.followUp}</span>
                     </td>
                   </tr>
                 ))}

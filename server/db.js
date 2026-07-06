@@ -8,6 +8,7 @@ if (!process.env.DATABASE_URL) {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
+  max: 1, // em serverless (Vercel) cada instância abre seu próprio pool; mantém baixo e deixa o pooler (porta 6543) multiplexar
 });
 
 module.exports = { pool };
