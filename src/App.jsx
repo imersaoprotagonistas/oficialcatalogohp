@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Package, Users, LayoutGrid, Activity, Plus, Trash2, Pencil, Copy,
   ShoppingCart, Send, Eye, LogOut, X, Check, Minus, MessageCircle,
-  UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw
+  UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw,
+  ChevronUp, ChevronDown
 } from "lucide-react";
 import { api } from "./api.js";
 
@@ -124,6 +125,7 @@ export default function App() {
   const [produtos, setProdutosState] = useState([]);
   const [consultores, setConsultoresState] = useState([]);
   const [catalogos, setCatalogosState] = useState([]);
+  const [secoes, setSecoes] = useState([]);
   const [envios, setEnvios] = useState([]);
 
   const [view, setView] = useState("login");
@@ -135,9 +137,9 @@ export default function App() {
   // Produtos/consultores/catálogos são públicos pra leitura (o backend filtra o que
   // cada papel pode ver); envios exige login, porque contém dados de clientes.
   async function carregarDadosPublicos() {
-    const [p, c, cat] = await Promise.all([api.produtos.listar(), api.consultores.listar(), api.catalogos.listar()]);
-    setProdutosState(p); setConsultoresState(c); setCatalogosState(cat);
-    return { produtos: p, consultores: c, catalogos: cat };
+    const [p, c, cat, sec] = await Promise.all([api.produtos.listar(), api.consultores.listar(), api.catalogos.listar(), api.secoes.listar()]);
+    setProdutosState(p); setConsultoresState(c); setCatalogosState(cat); setSecoes(sec);
+    return { produtos: p, consultores: c, catalogos: cat, secoes: sec };
   }
   async function carregarEnvios() {
     const env = await api.envios.listar();
@@ -206,6 +208,17 @@ export default function App() {
   function setProdutos(v) { persistirColecao(api.produtos, produtos, v, setProdutosState); }
   function setConsultores(v) { persistirColecao(api.consultores, consultores, v, setConsultoresState); }
   function setCatalogos(v) { persistirColecao(api.catalogos, catalogos, v, setCatalogosState); }
+
+  // Seções curadas são fixas (setor x chave de badge) — só edição, nunca criação/remoção.
+  async function atualizarSecao(id, patch) {
+    setSaving(true);
+    try {
+      const atualizado = await api.secoes.atualizar(id, patch);
+      setSecoes((atual) => atual.map((s) => (s.id === id ? atualizado : s)));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function criarEnvio(catalogoId, consultorId, clienteNome, clienteTelefone) {
     const novo = await api.envios.criar({ catalogoId, consultorId, clienteNome, clienteTelefone });
@@ -282,6 +295,7 @@ export default function App() {
           produtos={produtos} setProdutos={setProdutos}
           consultores={consultores} setConsultores={setConsultores}
           catalogos={catalogos} setCatalogos={setCatalogos}
+          secoes={secoes} atualizarSecao={atualizarSecao}
           envios={envios} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
@@ -307,6 +321,7 @@ export default function App() {
           })()}
           consultor={consultores.find((c) => c.id === preview.consultorId)}
           produtos={produtos}
+          secoes={secoes}
           simulate={preview.simulate}
           onPrimeiraVisualizacao={() => {
             if (preview.simulate || !preview.envioId) return;
@@ -453,11 +468,12 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, envios, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, envios, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
     { id: "consultores", label: "Consultores" },
+    { id: "secoes", label: "Seções" },
     { id: "rastreamento", label: "Rastreamento" },
   ];
 
@@ -488,6 +504,18 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
           <Hero title="Consultores" stats={[{ label: "Cadastrados", value: consultores.length }]} />
           <div className="max-w-6xl mx-auto px-6 py-8">
             <ConsultoresSection consultores={consultores} setConsultores={setConsultores} catalogos={catalogos} envios={envios} />
+          </div>
+        </>
+      )}
+
+      {tab === "secoes" && (
+        <>
+          <Hero title="Seções" stats={[
+            { label: "Ativas", value: secoes.filter((s) => s.ativo).length },
+            { label: "Total", value: secoes.length },
+          ]} />
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            <SecoesSection secoes={secoes} atualizarSecao={atualizarSecao} />
           </div>
         </>
       )}
@@ -836,6 +864,102 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   );
 }
 
+
+// --- Painel > Seções curadas (título/descrição/ativo/ordem por setor) ---
+// A cor de cada seção fica fixa aqui, ligada à chave do badge — só o texto e o
+// liga/desliga/ordem são editáveis pelo gerente (decisão de produto).
+const SECOES_COR = {
+  marca_exclusiva: "bg-orange-500",
+  lancamento: "bg-sky-500",
+  oferta: "bg-violet-500",
+  mais_vendido: "bg-amber-500",
+};
+
+function SecoesSection({ secoes, atualizarSecao }) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Seções curadas do catálogo</h2>
+      </div>
+      <p className="text-xs text-stone-400 mb-4 max-w-2xl">
+        Título, descrição, se aparece e em que ordem — pra cada setor. A cor de cada seção é fixa (ligada ao tipo de badge do produto).
+      </p>
+      <div className="grid lg:grid-cols-2 gap-4">
+        {["primeira", "farm"].map((setor) => (
+          <SetorSecoes key={setor} setor={setor}
+            secoes={secoes.filter((s) => s.setor === setor).sort((a, b) => a.ordem - b.ordem)}
+            atualizarSecao={atualizarSecao} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SetorSecoes({ setor, secoes, atualizarSecao }) {
+  function mover(index, delta) {
+    const alvo = secoes[index];
+    const vizinho = secoes[index + delta];
+    if (!alvo || !vizinho) return;
+    atualizarSecao(alvo.id, { ...alvo, ordem: vizinho.ordem });
+    atualizarSecao(vizinho.id, { ...vizinho, ordem: alvo.ordem });
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 rounded-xl p-4">
+      <h3 className="text-xs font-bold uppercase tracking-wide text-stone-500 mb-3">{SETORES[setor]}</h3>
+      <div className="space-y-2.5">
+        {secoes.map((s, i) => (
+          <SecaoCard key={s.id} secao={s} atualizarSecao={atualizarSecao}
+            onSubir={i > 0 ? () => mover(i, -1) : null}
+            onDescer={i < secoes.length - 1 ? () => mover(i, 1) : null} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
+  const [titulo, setTitulo] = useState(secao.titulo);
+  const [descricao, setDescricao] = useState(secao.descricao || "");
+
+  useEffect(() => { setTitulo(secao.titulo); setDescricao(secao.descricao || ""); }, [secao.titulo, secao.descricao]);
+
+  function salvarTitulo() { if (titulo.trim() && titulo !== secao.titulo) atualizarSecao(secao.id, { ...secao, titulo }); }
+  function salvarDescricao() { if (descricao !== (secao.descricao || "")) atualizarSecao(secao.id, { ...secao, descricao }); }
+
+  return (
+    <div className={`border rounded-lg p-3 ${secao.ativo ? "border-stone-200" : "border-stone-200 opacity-60"}`}>
+      <div className="flex items-start gap-2">
+        <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${SECOES_COR[secao.chave] || "bg-stone-400"}`} />
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <input value={titulo} onChange={(e) => setTitulo(e.target.value)} onBlur={salvarTitulo}
+            className="w-full font-bold text-sm border border-transparent hover:border-stone-200 focus:border-stone-300 rounded px-1.5 py-1 -mx-1.5" />
+          <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} onBlur={salvarDescricao} rows={2}
+            className="w-full text-xs text-stone-500 border border-transparent hover:border-stone-200 focus:border-stone-300 rounded px-1.5 py-1 -mx-1.5 resize-none" />
+        </div>
+        <div className="flex flex-col items-center gap-1 shrink-0">
+          <button disabled={!onSubir} onClick={onSubir} title="Mover pra cima"
+            className="p-0.5 text-stone-400 hover:text-stone-800 disabled:opacity-20 disabled:hover:text-stone-400">
+            <ChevronUp size={14} />
+          </button>
+          <button disabled={!onDescer} onClick={onDescer} title="Mover pra baixo"
+            className="p-0.5 text-stone-400 hover:text-stone-800 disabled:opacity-20 disabled:hover:text-stone-400">
+            <ChevronDown size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-stone-400">
+          {secao.ativo ? "Aparece no catálogo" : "Oculta do catálogo"}
+        </span>
+        <button onClick={() => atualizarSecao(secao.id, { ...secao, ativo: !secao.ativo })}
+          className={`text-[11px] font-bold uppercase tracking-wide rounded-md px-2.5 py-1 border ${secao.ativo ? "border-emerald-200 text-emerald-700 hover:bg-emerald-50" : "border-stone-300 text-stone-500 hover:bg-stone-50"}`}>
+          {secao.ativo ? "Ativa" : "Ativar"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // --- Painel > Produtos ---
 function ProdutosSection({ produtos, setProdutos, envios }) {
@@ -1536,7 +1660,16 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
 // ---------------------------------------------------------------------------
 // Catálogo público (cliente) — vitrine escura, estilo loja online
 // ---------------------------------------------------------------------------
-function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onSair }) {
+// Gradiente de cada seção curada é fixo (ligado à chave do badge); título/descrição/
+// ativo/ordem vêm da API (editáveis pelo gerente em Painel > Seções).
+const SECOES_GRAD = {
+  marca_exclusiva: "from-amber-900 via-orange-800 to-neutral-900",
+  lancamento: "from-sky-900 via-blue-800 to-neutral-900",
+  oferta: "from-violet-900 via-purple-800 to-neutral-900",
+  mais_vendido: "from-yellow-800 via-amber-700 to-neutral-900",
+};
+
+function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onSair }) {
   const [carrinho, setCarrinho] = useState({});
   const [showCart, setShowCart] = useState(false);
   const [busca, setBusca] = useState("");
@@ -1574,12 +1707,11 @@ function CatalogoPublico({ catalogo, consultor, produtos, simulate, onPrimeiraVi
   });
 
   const porBadge = (chave) => itensFiltrados.filter((it) => (it.produto.badges || []).includes(chave));
-  const secoesCuradas = [
-    { chave: "marca_exclusiva", titulo: "Marcas Exclusivas", desc: "Curadoria HP para destacar oportunidades com maior força comercial.", grad: "from-amber-900 via-orange-800 to-neutral-900" },
-    { chave: "lancamento", titulo: "Lançamentos", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-sky-900 via-blue-800 to-neutral-900" },
-    { chave: "oferta", titulo: "Ofertas", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-violet-900 via-purple-800 to-neutral-900" },
-    { chave: "mais_vendido", titulo: "Mais Vendidos", desc: "Produtos selecionados para facilitar a compra do cliente.", grad: "from-yellow-800 via-amber-700 to-neutral-900" },
-  ].map((s) => ({ ...s, itens: porBadge(s.chave) })).filter((s) => s.itens.length > 0);
+  const secoesCuradas = (secoes || [])
+    .filter((s) => s.setor === catalogo.setor && s.ativo)
+    .sort((a, b) => a.ordem - b.ordem)
+    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
+    .filter((s) => s.itens.length > 0);
 
   // Carrinho: { [produtoId]: { [sabor || SEM_SABOR]: quantidade } } — permite pedir
   // vários sabores do mesmo produto, cada combinação produto+sabor vira uma linha.

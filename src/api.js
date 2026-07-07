@@ -53,6 +53,11 @@ export const api = {
     atualizar: (id, c) => request(`/catalogos/${id}`, { method: "PUT", body: c }),
   },
 
+  secoes: {
+    listar: () => request("/secoes"),
+    atualizar: (id, s) => request(`/secoes/${id}`, { method: "PUT", body: s }),
+  },
+
   envios: {
     listar: () => request("/envios"),
     buscar: (id) => request(`/envios/${id}`).catch(() => null),

@@ -58,6 +58,20 @@ create table if not exists envios (
 create index if not exists envios_catalogo_id_idx on envios(catalogo_id);
 create index if not exists envios_consultor_id_idx on envios(consultor_id);
 
+-- Seções curadas do catálogo público (ex: "Marcas Exclusivas", "Lançamentos"), uma por
+-- combinação setor+chave de badge. título/descrição/ativo/ordem são editáveis pelo gerente;
+-- a cor/gradiente de cada seção continua fixa no front (ligada à chave), por decisão de produto.
+create table if not exists secoes_curadas (
+  id         text primary key, -- `${setor}_${chave}`
+  setor      text not null check (setor in ('farm', 'primeira')),
+  chave      text not null,    -- bate com a chave do badge do produto (marca_exclusiva, lancamento, oferta, mais_vendido)
+  titulo     text not null,
+  descricao  text,
+  ativo      boolean not null default true,
+  ordem      integer not null default 0,
+  unique (setor, chave)
+);
+
 -- Se você já tinha rodado este arquivo antes (tabela produtos já existe sem as colunas
 -- abaixo), rode só as linhas que faltarem:
 -- alter table produtos add column if not exists sabor text;
