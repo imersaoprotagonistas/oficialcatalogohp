@@ -1669,6 +1669,53 @@ const SECOES_GRAD = {
   mais_vendido: "from-yellow-800 via-amber-700 to-neutral-900",
 };
 
+// Arrastar-pra-rolar nos carrosséis horizontais: overflow-x-auto sozinho não deixa
+// arrastar com o cursor no mouse, e o toque no touch-action padrão fica ambíguo com o
+// scroll vertical da página. Pointer Events unificam mouse/touch/caneta num só handler;
+// touch-action: pan-y deixa o scroll vertical nativo intacto e só a gente cuida do horizontal.
+function useDragScroll() {
+  const ref = useRef(null);
+  const estado = useRef({ arrastando: false, x: 0, scrollInicial: 0, moveu: false });
+
+  function onPointerDown(e) {
+    const el = ref.current;
+    if (!el) return;
+    estado.current = { arrastando: true, x: e.clientX, scrollInicial: el.scrollLeft, moveu: false };
+    el.setPointerCapture?.(e.pointerId);
+    el.style.cursor = "grabbing";
+  }
+  function onPointerMove(e) {
+    const el = ref.current;
+    if (!el || !estado.current.arrastando) return;
+    const delta = e.clientX - estado.current.x;
+    if (Math.abs(delta) > 5) estado.current.moveu = true;
+    el.scrollLeft = estado.current.scrollInicial - delta;
+  }
+  function soltar() {
+    const el = ref.current;
+    estado.current.arrastando = false;
+    if (el) el.style.cursor = "grab";
+  }
+  // Sem isso, soltar o arrasto em cima de um card dispararia o clique dele (abriria o modal).
+  function onClickCapture(e) {
+    if (estado.current.moveu) { e.preventDefault(); e.stopPropagation(); }
+  }
+
+  return { ref, onPointerDown, onPointerMove, onPointerUp: soltar, onPointerLeave: soltar, onPointerCancel: soltar, onClickCapture };
+}
+
+function CarrosselProdutos({ itens, qtdPorProduto, onAbrirItem, accent }) {
+  const drag = useDragScroll();
+  return (
+    <div ref={drag.ref} onPointerDown={drag.onPointerDown} onPointerMove={drag.onPointerMove}
+      onPointerUp={drag.onPointerUp} onPointerLeave={drag.onPointerLeave} onPointerCancel={drag.onPointerCancel}
+      onClickCapture={drag.onClickCapture}
+      className="flex gap-4 overflow-x-auto pb-2 cursor-grab select-none" style={{ touchAction: "pan-y" }}>
+      {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => onAbrirItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+    </div>
+  );
+}
+
 function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onSair }) {
   const [carrinho, setCarrinho] = useState({});
   const [showCart, setShowCart] = useState(false);
@@ -1879,9 +1926,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                     <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">{marca}</span>
                     <span className="flex-1 h-px bg-white/10" />
                   </div>
-                  <div className="flex gap-4 overflow-x-auto pb-2">
-                    {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
-                  </div>
+                  <CarrosselProdutos itens={itens} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
                 </div>
               ))}
             </div>
@@ -2052,7 +2097,7 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
       onMouseEnter={(e) => { e.currentTarget.style.borderColor = hexToRgba(cor, 0.5); }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}>
       <div className="aspect-square m-2.5 rounded-lg border-2 border-dashed bg-white/[0.02] flex items-center justify-center relative overflow-hidden" style={{ width: "calc(100% - 20px)", borderColor: hexToRgba(cor, 0.3) }}>
-        {p.imagem ? <img src={p.imagem} alt={p.nome} className="w-full h-full object-contain p-3" /> : <span className="text-5xl">{p.emoji}</span>}
+        {p.imagem ? <img src={p.imagem} alt={p.nome} draggable={false} className="w-full h-full object-contain p-3" /> : <span className="text-5xl">{p.emoji}</span>}
         {qtd > 0 && <span className="absolute top-1.5 right-1.5 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: cor }}>{qtd}</span>}
       </div>
       <div className="px-3 pb-3">
