@@ -1707,11 +1707,21 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   });
 
   const porBadge = (chave) => itensFiltrados.filter((it) => (it.produto.badges || []).includes(chave));
+  // Dentro de cada seção curada, agrupa por marca — sem isso, seções com produtos de
+  // marcas diferentes (ex: "Marcas Exclusivas") viravam uma lista única sem separação.
+  const agruparPorMarca = (itens) => {
+    const grupos = {};
+    itens.forEach((it) => { const marca = it.produto.marca || "Outras marcas"; (grupos[marca] = grupos[marca] || []).push(it); });
+    return Object.entries(grupos)
+      .sort(([a], [b]) => (a === "Outras marcas" ? 1 : b === "Outras marcas" ? -1 : a.localeCompare(b)))
+      .map(([marca, itens]) => ({ marca, itens }));
+  };
   const secoesCuradas = (secoes || [])
     .filter((s) => s.setor === catalogo.setor && s.ativo)
     .sort((a, b) => a.ordem - b.ordem)
     .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
-    .filter((s) => s.itens.length > 0);
+    .filter((s) => s.itens.length > 0)
+    .map((s) => ({ ...s, grupos: agruparPorMarca(s.itens) }));
 
   // Carrinho: { [produtoId]: { [sabor || SEM_SABOR]: quantidade } } — permite pedir
   // vários sabores do mesmo produto, cada combinação produto+sabor vira uma linha.
@@ -1862,8 +1872,18 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
               <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
               <p className="text-white/60 text-xs mt-1">{s.desc}</p>
             </div>
-            <div className="flex gap-4 overflow-x-auto pb-2">
-              {s.itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+            <div className="space-y-5">
+              {s.grupos.map(({ marca, itens }) => (
+                <div key={marca}>
+                  <div className="flex items-center gap-2.5 mb-2.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">{marca}</span>
+                    <span className="flex-1 h-px bg-white/10" />
+                  </div>
+                  <div className="flex gap-4 overflow-x-auto pb-2">
+                    {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         ))}
