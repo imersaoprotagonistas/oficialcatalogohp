@@ -1946,8 +1946,18 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
           {itensFiltrados.length === 0 ? (
             <p className="text-stone-500 text-sm py-10 text-center">Nenhum produto encontrado com esse filtro.</p>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {itensFiltrados.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} accent={accent} />)}
+            <div className="space-y-8">
+              {agruparPorMarca(itensFiltrados).map(({ marca, itens }) => (
+                <div key={marca}>
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">{marca}</span>
+                    <span className="flex-1 h-px bg-white/10" />
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} accent={accent} />)}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
