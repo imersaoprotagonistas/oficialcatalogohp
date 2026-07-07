@@ -1675,24 +1675,31 @@ const SECOES_GRAD = {
 // touch-action: pan-y deixa o scroll vertical nativo intacto e só a gente cuida do horizontal.
 function useDragScroll() {
   const ref = useRef(null);
-  const estado = useRef({ arrastando: false, x: 0, scrollInicial: 0, moveu: false });
+  const estado = useRef({ arrastando: false, x: 0, scrollInicial: 0, moveu: false, pointerId: null });
 
   function onPointerDown(e) {
     const el = ref.current;
     if (!el) return;
-    estado.current = { arrastando: true, x: e.clientX, scrollInicial: el.scrollLeft, moveu: false };
-    el.setPointerCapture?.(e.pointerId);
-    el.style.cursor = "grabbing";
+    // Não captura o ponteiro aqui: um clique simples (sem arrastar) precisa continuar
+    // chegando normal no botão do produto. Só captura se virar arrasto de verdade (ver onPointerMove).
+    estado.current = { arrastando: true, x: e.clientX, scrollInicial: el.scrollLeft, moveu: false, pointerId: e.pointerId };
   }
   function onPointerMove(e) {
     const el = ref.current;
     if (!el || !estado.current.arrastando) return;
     const delta = e.clientX - estado.current.x;
-    if (Math.abs(delta) > 5) estado.current.moveu = true;
-    el.scrollLeft = estado.current.scrollInicial - delta;
+    if (Math.abs(delta) > 5 && !estado.current.moveu) {
+      estado.current.moveu = true;
+      el.setPointerCapture?.(e.pointerId);
+      el.style.cursor = "grabbing";
+    }
+    if (estado.current.moveu) el.scrollLeft = estado.current.scrollInicial - delta;
   }
   function soltar() {
     const el = ref.current;
+    if (el && estado.current.pointerId != null && el.hasPointerCapture?.(estado.current.pointerId)) {
+      el.releasePointerCapture(estado.current.pointerId);
+    }
     estado.current.arrastando = false;
     if (el) el.style.cursor = "grab";
   }
