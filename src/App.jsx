@@ -861,6 +861,8 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
           const publicado = cat.status === "publicado";
           const inativo = cat.status === "inativo";
           const rascunho = !publicado && !inativo;
+          const diasValidade = cat.dataFim ? diasParaExpirar(cat.dataFim) : null;
+          const expirou = diasValidade !== null && diasValidade < 0;
           const statusInfo = publicado
             ? { dot: "bg-emerald-500", texto: "text-emerald-600", label: "Publicado" }
             : inativo
@@ -879,14 +881,12 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
               </div>
               <div className="text-xs text-stone-400 mt-2">{cat.itens.length} produtos</div>
               {cat.dataFim && (() => {
-                const dias = diasParaExpirar(cat.dataFim);
-                const expirado = dias < 0;
-                const perto = publicado && dias >= 0 && dias <= DIAS_AVISO_EXPIRACAO;
+                const perto = publicado && diasValidade >= 0 && diasValidade <= DIAS_AVISO_EXPIRACAO;
                 return (
-                  <div className={`text-[11px] mt-1 ${expirado ? "text-red-500 font-semibold" : perto ? "text-amber-600 font-semibold" : "text-stone-400"}`}>
+                  <div className={`text-[11px] mt-1 ${expirou ? "text-red-500 font-semibold" : perto ? "text-amber-600 font-semibold" : "text-stone-400"}`}>
                     Válido {formatDataBR(cat.dataInicio)} – {formatDataBR(cat.dataFim)}
-                    {expirado && " · Expirado"}
-                    {perto && ` · Expira em ${dias === 0 ? "hoje" : dias === 1 ? "1 dia" : `${dias} dias`}`}
+                    {expirou && " · Expirado"}
+                    {perto && ` · Expira em ${diasValidade === 0 ? "hoje" : diasValidade === 1 ? "1 dia" : `${diasValidade} dias`}`}
                   </div>
                 );
               })()}
@@ -910,10 +910,13 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                     </button>
                   </>
                 )}
-                {inativo && (
+                {inativo && !expirou && (
                   <button onClick={() => reativar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-orange-200 text-orange-700 rounded-md px-2.5 py-1.5 hover:bg-orange-50">
                     Reativar
                   </button>
+                )}
+                {inativo && expirou && (
+                  <span className="text-[11px] text-stone-400 italic self-center">Edite e estenda a validade pra reativar</span>
                 )}
                 <button onClick={() => iniciarEdicao(cat)}
                   className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">

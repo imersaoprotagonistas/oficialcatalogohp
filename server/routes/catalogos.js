@@ -23,6 +23,14 @@ function toRow(c) {
 
 // Visitantes e consultores só veem catálogos publicados; o gerente vê todos (inclui rascunho/inativo).
 router.get("/", optionalAuth, ah(async (req, res) => {
+  // Sem cron/worker no projeto — a expiração é aplicada aqui, toda vez que alguém lista os
+  // catálogos (gerente, consultor ou visitante abrindo um link). Assim que passa do data_fim,
+  // o catálogo publicado vira inativo de verdade no banco, não só um aviso visual.
+  await pool.query(
+    `update catalogos set status = 'inativo'
+     where status = 'publicado' and data_fim is not null and data_fim < current_date`
+  );
+
   const isGerente = req.user?.role === "gerente";
   const { rows } = isGerente
     ? await pool.query("select * from catalogos order by criado_em desc")
