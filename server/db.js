@@ -1,9 +1,14 @@
 require("dotenv/config");
-const { Pool } = require("pg");
+const { Pool, types } = require("pg");
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL não definida. Copie server/.env.example para server/.env e preencha.");
 }
+
+// DATE (oid 1082) sai como "AAAA-MM-DD" puro, sem virar Date — o parser padrão do pg monta
+// um Date que desloca de dia dependendo do fuso, o que é exatamente o tipo de bug sutil que
+// não queremos numa data de validade de catálogo.
+types.setTypeParser(1082, (val) => val);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

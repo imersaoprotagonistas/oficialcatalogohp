@@ -27,6 +27,24 @@ const DIA_MS = 86400000;
 // ---------------------------------------------------------------------------
 const formatBRL = (n) => (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) : 0);
+// "AAAA-MM-DD" de hoje no fuso local (não UTC) — é o formato que <input type="date"> espera.
+function hojeISO() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+// Quantos dias faltam pro data_fim (negativo = já expirou). null se o catálogo não tem validade definida.
+function diasParaExpirar(dataFim) {
+  if (!dataFim) return null;
+  const hoje = new Date(hojeISO() + "T00:00:00");
+  const fim = new Date(dataFim + "T00:00:00");
+  return Math.round((fim - hoje) / DIA_MS);
+}
+const DIAS_AVISO_EXPIRACAO = 3;
+function formatDataBR(iso) {
+  if (!iso) return "";
+  const [, mes, dia] = iso.split("-");
+  return `${dia}/${mes}`;
+}
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const formatPct = (n) => `${(Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 // Fluxo de precificação: De -> % desconto -> Valor do desconto -> Por -> 3% OFF -> À vista.
@@ -494,6 +512,12 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
   ];
 
   const produtosAtivos = produtos.filter((p) => p.ativo !== false).length;
+  // Aviso de validade: catálogos publicados que já expiraram ou estão perto de expirar.
+  const catalogosExpirando = catalogos
+    .filter((c) => c.status === "publicado" && c.dataFim)
+    .map((c) => ({ catalogo: c, dias: diasParaExpirar(c.dataFim) }))
+    .filter(({ dias }) => dias <= DIAS_AVISO_EXPIRACAO)
+    .sort((a, b) => a.dias - b.dias);
 
   return (
     <div>
@@ -508,6 +532,23 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
           ]} />
           <div className="max-w-6xl mx-auto px-6 py-8 space-y-10">
             {saving && <div className="text-[11px] text-stone-400 -mt-4">Salvando…</div>}
+            {catalogosExpirando.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-amber-700 mb-2">
+                  ⚠ {catalogosExpirando.length} catálogo{catalogosExpirando.length === 1 ? "" : "s"} publicado{catalogosExpirando.length === 1 ? "" : "s"} perto do fim da validade
+                </div>
+                <div className="space-y-1">
+                  {catalogosExpirando.map(({ catalogo: c, dias }) => (
+                    <div key={c.id} className="text-sm text-amber-800">
+                      <span className="font-semibold">{c.nome}</span> ({SETORES[c.setor]}) —{" "}
+                      {dias < 0 ? `expirou há ${Math.abs(dias)} dia${Math.abs(dias) === 1 ? "" : "s"}`
+                        : dias === 0 ? "expira hoje" : dias === 1 ? "expira amanhã" : `expira em ${dias} dias`}
+                      {" "}(até {formatDataBR(c.dataFim)})
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
               setCatalogos={setCatalogos} onSimular={onSimular} />
             <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} />
@@ -611,6 +652,8 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   const [capa, setCapa] = useState("");
   const [subtitulo, setSubtitulo] = useState("");
   const [corDestaque, setCorDestaque] = useState(CATALOGO_COR_PADRAO);
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState("");
   const [selecionados, setSelecionados] = useState({});
   const [expandido, setExpandido] = useState(null);
   const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
@@ -625,6 +668,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     const base = {};
     produtos.forEach((p) => { base[p.id] = { on: false, de: p.precos?.[setor]?.de ?? 0, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
     setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO);
+    setDataInicio(hojeISO()); setDataFim("");
     setEditandoId(null); setCriando(true);
   }
   function iniciarEdicao(cat) {
@@ -638,6 +682,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     });
     setSelecionados(base);
     setNome(cat.nome); setSetor(cat.setor); setCapa(cat.capa || ""); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
+    setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
     setEditandoId(cat.id); setCriando(true);
   }
   function trocarSetor(novoSetor) {
@@ -655,10 +700,12 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     const itens = Object.entries(selecionados).filter(([, v]) => v.on)
       .map(([produtoId, v]) => ({ produtoId, precoDe: Number(v.de) || 0, precoVista: Number(v.vista) || 0, precoParcelado: Number(v.parcelado) || 0 }));
     if (!nome.trim() || itens.length === 0) { alert("Dê um nome ao catálogo e selecione ao menos 1 produto."); return; }
+    if (!dataInicio || !dataFim) { alert("Defina a data de início e de término da validade do catálogo."); return; }
+    if (dataFim < dataInicio) { alert("A data de término não pode ser antes da data de início."); return; }
     if (editandoId) {
-      setCatalogos(catalogos.map((c) => (c.id === editandoId ? { ...c, nome, setor, itens, capa, subtitulo, corDestaque } : c)));
+      setCatalogos(catalogos.map((c) => (c.id === editandoId ? { ...c, nome, setor, itens, capa, subtitulo, corDestaque, dataInicio, dataFim } : c)));
     } else {
-      const novo = { id: `cat_${Date.now()}`, nome, setor, itens, status, criadoEm: Date.now(), capa, subtitulo, corDestaque };
+      const novo = { id: `cat_${Date.now()}`, nome, setor, itens, status, criadoEm: Date.now(), capa, subtitulo, corDestaque, dataInicio, dataFim };
       setCatalogos([novo, ...catalogos]);
     }
     setCriando(false); setEditandoId(null);
@@ -695,6 +742,18 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
               <option value="farm">Setor: Farm</option>
               <option value="primeira">Setor: 1º Compra</option>
             </select>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] text-stone-400 block mb-1">Início da validade</label>
+              <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)}
+                className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-[11px] text-stone-400 block mb-1">Término da validade</label>
+              <input type="date" value={dataFim} min={dataInicio || undefined} onChange={(e) => setDataFim(e.target.value)}
+                className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
           </div>
           <div className="grid sm:grid-cols-[auto_1fr_auto] gap-3 items-center bg-stone-50 rounded-lg p-3">
             <div className="flex items-center gap-3">
@@ -819,6 +878,18 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                 </div>
               </div>
               <div className="text-xs text-stone-400 mt-2">{cat.itens.length} produtos</div>
+              {cat.dataFim && (() => {
+                const dias = diasParaExpirar(cat.dataFim);
+                const expirado = dias < 0;
+                const perto = publicado && dias >= 0 && dias <= DIAS_AVISO_EXPIRACAO;
+                return (
+                  <div className={`text-[11px] mt-1 ${expirado ? "text-red-500 font-semibold" : perto ? "text-amber-600 font-semibold" : "text-stone-400"}`}>
+                    Válido {formatDataBR(cat.dataInicio)} – {formatDataBR(cat.dataFim)}
+                    {expirado && " · Expirado"}
+                    {perto && ` · Expira em ${dias === 0 ? "hoje" : dias === 1 ? "1 dia" : `${dias} dias`}`}
+                  </div>
+                );
+              })()}
               <div className="flex items-center gap-1.5 mt-2.5">
                 <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dot}`} />
                 <span className={`text-[10px] font-bold uppercase tracking-wide ${statusInfo.texto}`}>{statusInfo.label}</span>

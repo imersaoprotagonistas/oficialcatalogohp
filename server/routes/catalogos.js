@@ -16,6 +16,8 @@ function toRow(c) {
     capa: c.capa,
     subtitulo: c.subtitulo,
     corDestaque: c.cor_destaque,
+    dataInicio: c.data_inicio, // "AAAA-MM-DD" ou null (catálogo criado antes dessa coluna existir)
+    dataFim: c.data_fim,
   };
 }
 
@@ -32,9 +34,10 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
   const id = b.id || `cat_${Date.now()}`;
   const { rows } = await pool.query(
-    `insert into catalogos (id, nome, setor, itens, status, capa, subtitulo, cor_destaque)
-     values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-    [id, b.nome, b.setor, JSON.stringify(b.itens || []), b.status || "rascunho", b.capa, b.subtitulo, b.corDestaque]
+    `insert into catalogos (id, nome, setor, itens, status, capa, subtitulo, cor_destaque, data_inicio, data_fim)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+    [id, b.nome, b.setor, JSON.stringify(b.itens || []), b.status || "rascunho", b.capa, b.subtitulo, b.corDestaque,
+      b.dataInicio || null, b.dataFim || null]
   );
   res.status(201).json(toRow(rows[0]));
 }));
@@ -45,9 +48,10 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
     `update catalogos set
        nome=coalesce($1, nome), setor=coalesce($2, setor), itens=coalesce($3, itens),
        status=coalesce($4, status), capa=coalesce($5, capa), subtitulo=coalesce($6, subtitulo),
-       cor_destaque=coalesce($7, cor_destaque)
-     where id=$8 returning *`,
-    [b.nome, b.setor, b.itens ? JSON.stringify(b.itens) : null, b.status, b.capa, b.subtitulo, b.corDestaque, req.params.id]
+       cor_destaque=coalesce($7, cor_destaque), data_inicio=coalesce($8, data_inicio), data_fim=coalesce($9, data_fim)
+     where id=$10 returning *`,
+    [b.nome, b.setor, b.itens ? JSON.stringify(b.itens) : null, b.status, b.capa, b.subtitulo, b.corDestaque,
+      b.dataInicio || null, b.dataFim || null, req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Catálogo não encontrado." });
   res.json(toRow(rows[0]));

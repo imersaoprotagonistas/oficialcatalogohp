@@ -39,7 +39,9 @@ create table if not exists catalogos (
   criado_em     timestamptz not null default now(),
   capa          text,
   subtitulo     text,
-  cor_destaque  text
+  cor_destaque  text,
+  data_inicio   date, -- validade do catálogo; nulo nos catálogos criados antes dessa coluna existir
+  data_fim      date  -- o painel avisa o gerente quando algum catálogo publicado está perto do data_fim
 );
 
 create table if not exists envios (
@@ -88,3 +90,5 @@ create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_re
 -- alter table produtos add column if not exists sabor text;
 -- alter table produtos add column if not exists custo numeric;
 -- alter table produtos add column if not exists sabores jsonb not null default '[]';
+-- alter table catalogos add column if not exists data_inicio date;
+-- alter table catalogos add column if not exists data_fim date;
