@@ -1882,7 +1882,8 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
     if (!item) return [];
     return Object.entries(porSabor).filter(([, q]) => q > 0).map(([saborKey, quantidade]) => ({
       produtoId, sabor: saborKey === SEM_SABOR ? null : saborKey, quantidade,
-      precoVista: item.precoVista, nome: produtosMap[produtoId].nome,
+      // Carrinho/pedido usam o "Por" (não o à vista) — é o único preço que o cliente vê na tela agora.
+      precoVista: item.precoParcelado, nome: produtosMap[produtoId].nome,
       emoji: produtosMap[produtoId].emoji, imagem: produtosMap[produtoId].imagem,
       marca: produtosMap[produtoId].marca || "Outras marcas",
     }));
@@ -1951,7 +1952,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
           </span>
           <h1 className="font-black text-4xl sm:text-5xl leading-[1.05]">{catalogo.nome}</h1>
           <p className="font-semibold text-sm mt-3" style={{ color: accent }}>{catalogo.subtitulo || "Escolha seus suplementos e envie seu pedido"}</p>
-          <p className="text-stone-400 text-sm mt-1">{itensValidos.length} produtos selecionados especialmente pra você, com preço à vista e parcelado.</p>
+          <p className="text-stone-400 text-sm mt-1">{itensValidos.length} produtos selecionados especialmente pra você.</p>
           <button onClick={() => gradeRef.current?.scrollIntoView({ behavior: "smooth" })}
             className="mt-5 transition text-white font-bold text-sm rounded-lg px-5 py-3" style={{ backgroundColor: accent }}>
             Ver produtos
@@ -2097,14 +2098,13 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                 {modalItem.precoDe > modalItem.precoParcelado && (
                   <div className="text-stone-500 text-xs line-through">De {formatBRL(modalItem.precoDe)}</div>
                 )}
-                <div className="font-black text-xl">{formatBRL(modalItem.precoParcelado)} <span className="text-stone-400 font-normal text-sm">no cartão</span></div>
-                <div className="text-emerald-400 font-bold text-sm">{formatBRL(modalItem.precoVista)} à vista</div>
+                <div className="font-black text-xl">{formatBRL(modalItem.precoParcelado)}</div>
               </div>
 
               {(modalItem.produto.sabores?.length || 0) >= 2 ? (
                 <div className="mt-5">
                   <div className="text-stone-400 text-xs mb-2">
-                    Este produto tem preço único. Veja o valor no cartão de cada sabor abaixo (à vista = −3%).
+                    Este produto tem preço único. Veja o valor de cada sabor abaixo.
                   </div>
                   <div className="space-y-1.5">
                     {modalItem.produto.sabores.map((sabor) => {
@@ -2113,7 +2113,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                         <div key={sabor} className="flex items-center justify-between bg-white/5 rounded-xl px-3 py-2">
                           <div>
                             <div className="text-sm font-semibold">{sabor}</div>
-                            <div className="text-stone-400 text-[11px]">{formatBRL(modalItem.precoParcelado)} no cartão</div>
+                            <div className="text-stone-400 text-[11px]">{formatBRL(modalItem.precoParcelado)}</div>
                           </div>
                           <div className="flex items-center gap-2.5 shrink-0">
                             <button onClick={() => alterarQtd(modalItem.produtoId, sabor, -1)} disabled={qtdSabor === 0}
@@ -2237,8 +2237,7 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
 
         <div className="mt-2.5">
           {temDe && <div className="text-stone-500 text-[10px] line-through">De {formatBRL(item.precoDe)}</div>}
-          <div className="font-black text-sm">{formatBRL(item.precoParcelado)} <span className="text-stone-500 font-normal text-[10px]">no cartão</span></div>
-          <div className="text-emerald-400 font-bold text-xs">{formatBRL(item.precoVista)} à vista</div>
+          <div className="font-black text-sm">{formatBRL(item.precoParcelado)}</div>
         </div>
 
         <div className="mt-2.5 w-full border border-white/15 text-stone-300 text-[11px] font-bold uppercase tracking-wide rounded-lg py-1.5 text-center">
