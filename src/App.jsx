@@ -1648,6 +1648,8 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
     return { label: "Aguardando", cls: "bg-stone-100 text-stone-500" };
   }
 
+  const linkGeral = `${linkBase()}#/c/${catalogo.id}/${consultor.id}`;
+
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1656,6 +1658,11 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
           <div className="text-[11px] text-stone-400">{catalogo.itens.length} produtos · {SETORES[catalogo.setor]}</div>
         </div>
         <div className="flex gap-2">
+          <button onClick={() => { navigator.clipboard?.writeText(linkGeral); setCopiado("geral"); setTimeout(() => setCopiado(null), 1200); }}
+            title="Um link só pra mandar pra vários clientes — cada abertura vira um registro novo no Rastreamento"
+            className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
+            {copiado === "geral" ? <Check size={13} /> : <Copy size={13} />} {copiado === "geral" ? "Copiado" : "Link geral"}
+          </button>
           <button onClick={onSimular} className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
             <Eye size={13} /> Pré-visualizar
           </button>
