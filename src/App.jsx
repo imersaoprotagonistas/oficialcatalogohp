@@ -127,6 +127,7 @@ export default function App() {
   const [catalogos, setCatalogosState] = useState([]);
   const [secoes, setSecoes] = useState([]);
   const [envios, setEnvios] = useState([]);
+  const [buscas, setBuscas] = useState([]); // buscas sem resultado no catálogo público — só o gerente enxerga
 
   const [view, setView] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
@@ -141,16 +142,21 @@ export default function App() {
     setProdutosState(p); setConsultoresState(c); setCatalogosState(cat); setSecoes(sec);
     return { produtos: p, consultores: c, catalogos: cat, secoes: sec };
   }
-  async function carregarEnvios() {
-    const env = await api.envios.listar();
+  // "role" vem explícito (em vez de ler currentUser do state) porque isso é chamado logo
+  // depois de um setCurrentUser no login, antes do re-render que atualizaria o state.
+  async function carregarEnvios(role) {
+    const chamadas = [api.envios.listar()];
+    if (role === "gerente") chamadas.push(api.buscas.listar());
+    const [env, busc] = await Promise.all(chamadas);
     setEnvios(env);
+    if (busc) setBuscas(busc);
     return env;
   }
 
   async function sincronizar() {
     setSincronizando(true);
     await carregarDadosPublicos();
-    if (currentUser) await carregarEnvios();
+    if (currentUser) await carregarEnvios(currentUser.role);
     setSincronizando(false);
   }
 
@@ -236,15 +242,21 @@ export default function App() {
     const { token } = await api.auth.loginGerente(senha);
     api.setToken(token);
     setCurrentUser({ role: "gerente" });
-    await Promise.all([carregarDadosPublicos(), carregarEnvios()]);
+    await Promise.all([carregarDadosPublicos(), carregarEnvios("gerente")]);
     setView("gerente");
   }
   async function loginConsultor(consultorId, senha) {
     const { token, user } = await api.auth.loginConsultor(consultorId, senha);
     api.setToken(token);
     setCurrentUser({ role: "consultor", ...user });
-    await Promise.all([carregarDadosPublicos(), carregarEnvios()]);
+    await Promise.all([carregarDadosPublicos(), carregarEnvios("consultor")]);
     setView("consultor");
+  }
+
+  // Fogo-e-esquece: não bloqueia a navegação do visitante nem precisa atualizar
+  // nenhum state local (o gerente vê o agregado quando abrir/sincronizar o Rastreamento).
+  function registrarBuscaSemResultado(catalogoId, consultorId, termo) {
+    api.buscas.registrar({ catalogoId, consultorId, termo }).catch(() => {});
   }
 
   function logout() {
@@ -296,7 +308,7 @@ export default function App() {
           consultores={consultores} setConsultores={setConsultores}
           catalogos={catalogos} setCatalogos={setCatalogos}
           secoes={secoes} atualizarSecao={atualizarSecao}
-          envios={envios} saving={saving} onLogout={logout}
+          envios={envios} buscas={buscas} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
         />
@@ -334,6 +346,10 @@ export default function App() {
           onPedido={(detalhe) => {
             if (preview.simulate || !preview.envioId) return;
             marcarEvento(preview.envioId, "pedidoEm", detalhe);
+          }}
+          onBuscaSemResultado={(termo) => {
+            if (preview.simulate) return;
+            registrarBuscaSemResultado(preview.catalogoId, preview.consultorId, termo);
           }}
           onSair={preview.returnTo ? () => { setView(preview.returnTo === "consultor" ? "consultor" : "gerente"); setPreview(null); } : undefined}
         />
@@ -468,7 +484,7 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, envios, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
@@ -521,7 +537,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
       )}
 
       {tab === "rastreamento" && (
-        <RastreamentoView consultores={consultores} catalogos={catalogos} envios={envios} escopo="todos"
+        <RastreamentoView consultores={consultores} catalogos={catalogos} envios={envios} buscas={buscas} escopo="todos"
           onSincronizar={onSincronizar} sincronizando={sincronizando} />
       )}
     </div>
@@ -1319,7 +1335,7 @@ function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) 
 // ---------------------------------------------------------------------------
 // Rastreamento (compartilhado entre Gerente=todos e Consultor=próprio)
 // ---------------------------------------------------------------------------
-function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsultorId, onSincronizar, sincronizando }) {
+function RastreamentoView({ consultores, catalogos, envios, buscas, escopo, apenasConsultorId, onSincronizar, sincronizando }) {
   const [filtroConsultor, setFiltroConsultor] = useState("todos");
   const [filtroCatalogo, setFiltroCatalogo] = useState("todos");
   const [filtroStatus, setFiltroStatus] = useState("todos");
@@ -1473,6 +1489,34 @@ function RastreamentoView({ consultores, catalogos, envios, escopo, apenasConsul
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {escopo === "todos" && buscas && buscas.length > 0 && (
+          <div>
+            <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">
+              Buscas sem resultado <span className="text-stone-300 font-normal normal-case">— o que os clientes procuraram e não achou no catálogo</span>
+            </h2>
+            <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 font-bold">Termo buscado</th>
+                    <th className="text-right px-4 py-2.5 font-bold">Vezes</th>
+                    <th className="text-right px-4 py-2.5 font-bold">Última busca</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {buscas.slice(0, 15).map((b) => (
+                    <tr key={b.termo} className="border-t border-stone-100">
+                      <td className="px-4 py-2.5 font-semibold">{b.termo}</td>
+                      <td className="px-4 py-2.5 text-right font-mono">{b.qtd}</td>
+                      <td className="px-4 py-2.5 text-right text-stone-400 text-xs">{new Date(b.ultima).toLocaleDateString("pt-BR")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -1723,7 +1767,52 @@ function CarrosselProdutos({ itens, qtdPorProduto, onAbrirItem, accent }) {
   );
 }
 
-function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onSair }) {
+// Estado "sem resultado" da busca: em vez de só avisar que não achou, oferece um jeito
+// de perguntar pro consultor (WhatsApp já preenchido) e sugere produtos parecidos, pra não
+// perder a venda por causa de um produto que não está nesse catálogo específico.
+function SemResultados({ busca, categoriaFiltro, itensValidos, consultor, catalogo, qtdPorProduto, onAbrir, accent, onBuscaSemResultado }) {
+  const termo = busca.trim();
+
+  useEffect(() => {
+    if (!onBuscaSemResultado || termo.length < 2) return;
+    const handle = setTimeout(() => onBuscaSemResultado(termo), 800);
+    return () => clearTimeout(handle);
+  }, [termo]);
+
+  const sugestoes = useMemo(() => {
+    if (categoriaFiltro !== "todas") {
+      return itensValidos.filter((it) => (it.produto.categoria || "Outros") === categoriaFiltro).slice(0, 4);
+    }
+    const maisVendidos = itensValidos.filter((it) => (it.produto.badges || []).includes("mais_vendido"));
+    return (maisVendidos.length > 0 ? maisVendidos : itensValidos).slice(0, 4);
+  }, [itensValidos, categoriaFiltro]);
+
+  const mensagem = `Olá! Procurei${termo ? ` "${termo}"` : ""} no catálogo "${catalogo.nome}" e não encontrei. Vocês têm?`;
+  const linkWhats = `https://wa.me/${toWaNumber(consultor.whatsapp)}?text=${encodeURIComponent(mensagem)}`;
+
+  return (
+    <div className="py-10 text-center">
+      <p className="text-stone-400 text-sm">
+        {termo ? <>Não encontramos <span className="text-white font-semibold">"{termo}"</span> neste catálogo.</> : "Nenhum produto encontrado com esse filtro."}
+      </p>
+      <a href={linkWhats} target="_blank" rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 mt-4 text-white font-bold text-sm rounded-lg px-4 py-2.5" style={{ backgroundColor: accent }}>
+        <MessageCircle size={15} /> Perguntar pro consultor no WhatsApp
+      </a>
+
+      {sugestoes.length > 0 && (
+        <div className="mt-10 text-left">
+          <h3 className="text-stone-400 text-xs font-bold uppercase tracking-wide mb-3">Talvez você goste destes</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {sugestoes.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => onAbrir(it)} accent={accent} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onBuscaSemResultado, onSair }) {
   const [carrinho, setCarrinho] = useState({});
   const [showCart, setShowCart] = useState(false);
   const [busca, setBusca] = useState("");
@@ -1944,7 +2033,9 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
         <div>
           <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
           {itensFiltrados.length === 0 ? (
-            <p className="text-stone-500 text-sm py-10 text-center">Nenhum produto encontrado com esse filtro.</p>
+            <SemResultados busca={busca} categoriaFiltro={categoriaFiltro} itensValidos={itensValidos}
+              consultor={consultor} catalogo={catalogo} qtdPorProduto={qtdPorProduto} onAbrir={setModalItem}
+              accent={accent} onBuscaSemResultado={onBuscaSemResultado} />
           ) : (
             <div className="space-y-8">
               {agruparPorMarca(itensFiltrados).map(({ marca, itens }) => (

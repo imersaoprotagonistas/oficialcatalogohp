@@ -58,6 +58,11 @@ export const api = {
     atualizar: (id, s) => request(`/secoes/${id}`, { method: "PUT", body: s }),
   },
 
+  buscas: {
+    registrar: (dados) => request("/buscas", { method: "POST", body: dados }),
+    listar: () => request("/buscas"),
+  },
+
   envios: {
     listar: () => request("/envios"),
     buscar: (id) => request(`/envios/${id}`).catch(() => null),

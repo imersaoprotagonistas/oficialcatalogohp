@@ -72,6 +72,17 @@ create table if not exists secoes_curadas (
   unique (setor, chave)
 );
 
+-- Termos que o cliente buscou no catálogo público e não encontraram nenhum produto.
+-- Vira sinal de demanda pro gerente na tela de Rastreamento (Painel > Rastreamento).
+create table if not exists buscas_sem_resultado (
+  id           text primary key,
+  catalogo_id  text not null references catalogos(id) on delete cascade,
+  consultor_id text not null references consultores(id) on delete cascade,
+  termo        text not null,
+  criado_em    timestamptz not null default now()
+);
+create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_resultado(catalogo_id);
+
 -- Se você já tinha rodado este arquivo antes (tabela produtos já existe sem as colunas
 -- abaixo), rode só as linhas que faltarem:
 -- alter table produtos add column if not exists sabor text;
