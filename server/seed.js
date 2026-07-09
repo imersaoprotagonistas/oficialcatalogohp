@@ -31,16 +31,24 @@ const PRODUTOS = [
     precos: { primeira: { de: 99.9, desconto: 5.01, parcelado: 94.9, vista: 84.9 }, farm: { de: 99.9, desconto: 15.02, parcelado: 84.9, vista: 74.9 } } },
 ];
 
-const WHATSAPP_TESTE = "5585985175032";
-const FUNCIONARIOS_FARM = ["Maycon", "Janderson", "Thayrlla", "Giovanna", "Alef", "Caio", "Valesca", "Sangela"];
+// Thayrlla (farm3) não trabalha mais na empresa — id aposentado, não reaproveitar.
+const FUNCIONARIOS_FARM = [
+  { id: "farm1", nome: "Maycon", whatsapp: "5585999891937" },
+  { id: "farm2", nome: "Janderson", whatsapp: "5585988442442" },
+  { id: "farm4", nome: "Giovanna", whatsapp: "5585988711224" },
+  { id: "farm5", nome: "Alef", whatsapp: "5585985020142" },
+  { id: "farm6", nome: "Caio", whatsapp: "5585986985953" },
+  { id: "farm7", nome: "Valesca", whatsapp: "5585981470157" },
+  { id: "farm8", nome: "Sangela", whatsapp: "5585987439381" },
+];
 const CONSULTORES = [
-  ...FUNCIONARIOS_FARM.map((nome, i) => ({
-    id: `farm${i + 1}`, nome,
+  ...FUNCIONARIOS_FARM.map(({ id, nome, whatsapp }) => ({
+    id, nome,
     email: `${nome.toLowerCase()}@hpdistribuidora.com.br`,
-    whatsapp: WHATSAPP_TESTE, setor: "farm", senha: "1234",
+    whatsapp, setor: "farm", senha: "1234",
   })),
   { id: "primeira1", nome: "Aline", email: "aline@hpdistribuidora.com.br",
-    whatsapp: WHATSAPP_TESTE, setor: "primeira", senha: "1234" },
+    whatsapp: "5585999166784", setor: "primeira", senha: "1234" },
 ];
 
 async function seed() {
