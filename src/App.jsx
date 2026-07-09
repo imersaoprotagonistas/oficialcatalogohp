@@ -2196,7 +2196,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                 {modalItem.precoDe > modalItem.precoParcelado && (
                   <div className="text-stone-500 text-xs line-through">De {formatBRL(modalItem.precoDe)}</div>
                 )}
-                <div className="font-black text-xl">{formatBRL(modalItem.precoParcelado)}</div>
+                <div className="font-black text-xl">Por {formatBRL(modalItem.precoParcelado)}</div>
               </div>
 
               {(modalItem.produto.sabores?.length || 0) >= 2 ? (
@@ -2211,7 +2211,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                         <div key={sabor} className="flex items-center justify-between bg-white/5 rounded-xl px-3 py-2">
                           <div>
                             <div className="text-sm font-semibold">{sabor}</div>
-                            <div className="text-stone-400 text-[11px]">{formatBRL(modalItem.precoParcelado)}</div>
+                            <div className="text-stone-400 text-[11px]">Por {formatBRL(modalItem.precoParcelado)}</div>
                           </div>
                           <div className="flex items-center gap-2.5 shrink-0">
                             <button onClick={() => alterarQtd(modalItem.produtoId, sabor, -1)} disabled={qtdSabor === 0}
@@ -2335,7 +2335,7 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
 
         <div className="mt-2.5">
           {temDe && <div className="text-stone-500 text-[10px] line-through">De {formatBRL(item.precoDe)}</div>}
-          <div className="font-black text-sm">{formatBRL(item.precoParcelado)}</div>
+          <div className="font-black text-sm">Por {formatBRL(item.precoParcelado)}</div>
         </div>
 
         <div className="mt-2.5 w-full border border-white/15 text-stone-300 text-[11px] font-bold uppercase tracking-wide rounded-lg py-1.5 text-center">
