@@ -1185,16 +1185,28 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
     } }); }}
       className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
       <div className="grid sm:grid-cols-4 gap-3">
-        <input required placeholder="Nome do produto" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })}
-          className="sm:col-span-2 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <input placeholder="Gramatura" value={f.gramatura} onChange={(e) => setF({ ...f, gramatura: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <input list="cats" placeholder="Categoria" value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <datalist id="cats">{CATEGORIA_SUGESTOES.map((c) => <option key={c} value={c} />)}</datalist>
+        <div className="sm:col-span-2">
+          <label className="text-[11px] text-stone-400 block mb-1">Nome do produto</label>
+          <input required value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Gramatura</label>
+          <input value={f.gramatura} onChange={(e) => setF({ ...f, gramatura: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Categoria</label>
+          <input list="cats" value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <datalist id="cats">{CATEGORIA_SUGESTOES.map((c) => <option key={c} value={c} />)}</datalist>
+        </div>
       </div>
-      <textarea placeholder="Descrição" value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })}
-        className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" rows={2} />
+      <div>
+        <label className="text-[11px] text-stone-400 block mb-1">Descrição</label>
+        <textarea value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })}
+          className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" rows={2} />
+      </div>
       <div className="flex items-center gap-3 bg-stone-50 rounded-lg p-3">
         <div className="w-14 h-14 rounded-lg border border-dashed border-stone-300 bg-white overflow-hidden flex items-center justify-center shrink-0">
           {f.imagem ? <img src={f.imagem} alt="Produto" className="w-full h-full object-contain" /> : <span className="text-2xl">{f.emoji}</span>}
@@ -1209,14 +1221,26 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
         </div>
       </div>
       <div className="grid sm:grid-cols-4 gap-3">
-        <input placeholder="Ícone (emoji)" value={f.emoji} onChange={(e) => setF({ ...f, emoji: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <input placeholder="Marca (opcional)" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        <input type="number" step="0.01" placeholder="Custo (R$)" value={f.custo ?? ""} onChange={(e) => setF({ ...f, custo: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Custo do produto, usado pra calcular a margem" />
-        <input placeholder="Nota promocional (opcional)" value={f.notaPromo} onChange={(e) => setF({ ...f, notaPromo: e.target.value })}
-          className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Ícone (emoji)</label>
+          <input value={f.emoji} onChange={(e) => setF({ ...f, emoji: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Marca (opcional)</label>
+          <input value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Custo (R$)</label>
+          <input type="number" step="0.01" value={f.custo ?? ""} onChange={(e) => setF({ ...f, custo: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Custo do produto, usado pra calcular a margem" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400 block mb-1">Nota promocional (opcional)</label>
+          <input value={f.notaPromo} onChange={(e) => setF({ ...f, notaPromo: e.target.value })}
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+        </div>
       </div>
       <div>
         <label className="text-[11px] text-stone-400 block mb-1.5">
