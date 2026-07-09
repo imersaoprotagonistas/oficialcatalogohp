@@ -6,6 +6,10 @@ const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
+// A foto vai em base64 dentro da coluna "imagem" (até 15mb, ver server/app.js). Embutir isso
+// em toda listagem deixava o catálogo público baixando ~40mb só de fotos antes de mostrar
+// qualquer produto. Agora a listagem só diz "temImagem" e a foto em si sai por uma rota própria
+// (/:id/imagem), servida como imagem de verdade — o navegador cacheia e carrega sob demanda.
 function toRow(p) {
   return {
     id: p.id,
@@ -14,7 +18,7 @@ function toRow(p) {
     categoria: p.categoria,
     descricao: p.descricao,
     emoji: p.emoji,
-    imagem: p.imagem,
+    temImagem: p.tem_imagem ?? !!p.imagem,
     ativo: p.ativo,
     marca: p.marca,
     sabores: p.sabores || [], // array de sabores disponíveis, ex: ["Chocolate","Baunilha"]
@@ -25,9 +29,27 @@ function toRow(p) {
   };
 }
 
+// Não seleciona a coluna "imagem" aqui: além de não ir pro cliente, evita puxar ~40mb de base64
+// do Postgres pro servidor a cada listagem só pra descartar em seguida.
 router.get("/", ah(async (req, res) => {
-  const { rows } = await pool.query("select * from produtos order by nome");
+  const { rows } = await pool.query(
+    `select id, nome, gramatura, categoria, descricao, emoji, (imagem is not null) as tem_imagem,
+       ativo, marca, sabores, custo, badges, nota_promo, precos
+     from produtos order by nome`
+  );
   res.json(rows.map(toRow));
+}));
+
+// Serve a foto de verdade (não o JSON) a partir do data URL salvo em "imagem", com cache no
+// navegador — sobrescreve o no-store global (server/app.js) só pra esta rota.
+router.get("/:id/imagem", ah(async (req, res) => {
+  const { rows } = await pool.query("select imagem from produtos where id = $1", [req.params.id]);
+  const dataUrl = rows[0]?.imagem;
+  const m = dataUrl && dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return res.status(404).end();
+  res.set("Cache-Control", "public, max-age=86400");
+  res.set("Content-Type", m[1]);
+  res.send(Buffer.from(m[2], "base64"));
 }));
 
 router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {

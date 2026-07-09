@@ -73,6 +73,23 @@ const toWaNumber = (raw) => {
   const digits = String(raw || "").replace(/\D/g, "");
   return digits.startsWith("55") ? digits : `55${digits}`;
 };
+// Fonte da imagem pra exibir: se já tem o base64 em mãos (produto recém-editado nesta sessão),
+// usa direto, sem round-trip; senão busca na rota dedicada (leve, cacheável pelo navegador).
+// Ver server/routes/produtos.js e server/routes/catalogos.js.
+const produtoImgSrc = (p) => (p?.imagem ? p.imagem : p?.temImagem ? api.produtos.imagemUrl(p.id) : null);
+const catalogoCapaSrc = (c) => (c?.capa ? c.capa : c?.temCapa ? api.catalogos.capaUrl(c.id) : null);
+// Baixa uma imagem já salva (das rotas acima) de volta como data URL, pra pré-carregar o
+// formulário de edição sem precisar reenviar o produto/catálogo inteiro só pra manter a foto.
+async function urlParaDataUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) return "";
+  const blob = await res.blob();
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
 const CATALOGO_COR_PADRAO = "#f97316";
 const SEM_SABOR = "_"; // chave usada no carrinho pra produtos sem variação de sabor
 const hexToRgba = (hex, alpha) => {
@@ -87,6 +104,28 @@ function fileToDataUrl(file) {
     reader.onload = () => resolve(reader.result);
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+// Fotos de produto/capa vêm direto do celular (facilmente 3-4mb cada), o que pesava tanto no
+// banco quanto na resposta da API. Redimensiona no navegador antes de enviar — se algo falhar
+// no meio do caminho, cai pra imagem original sem cortar, nunca perde a foto por causa disso.
+async function fileParaDataUrlOtimizado(file, maxDim = 1000, qualidade = 0.85) {
+  const original = await fileToDataUrl(file);
+  if (!file.type?.startsWith("image/") || file.type === "image/svg+xml") return original;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, maxDim / Math.max(img.width, img.height));
+      if (escala >= 1) { resolve(original); return; }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * escala);
+      canvas.height = Math.round(img.height * escala);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      const formato = file.type === "image/png" ? "image/png" : "image/jpeg";
+      resolve(canvas.toDataURL(formato, qualidade));
+    };
+    img.onerror = () => resolve(original);
+    img.src = original;
   });
 }
 
@@ -671,7 +710,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     setDataInicio(hojeISO()); setDataFim("");
     setEditandoId(null); setCriando(true);
   }
-  function iniciarEdicao(cat) {
+  async function iniciarEdicao(cat) {
     const itensPorId = Object.fromEntries(cat.itens.map((it) => [it.produtoId, it]));
     const base = {};
     produtos.forEach((p) => {
@@ -681,9 +720,11 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
         : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0 };
     });
     setSelecionados(base);
-    setNome(cat.nome); setSetor(cat.setor); setCapa(cat.capa || ""); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
+    setNome(cat.nome); setSetor(cat.setor); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
     setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
     setEditandoId(cat.id); setCriando(true);
+    // Capa não vem mais na listagem (ver server/routes/catalogos.js) — busca só ao entrar na edição.
+    setCapa(cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "");
   }
   function trocarSetor(novoSetor) {
     setSetor(novoSetor);
@@ -694,7 +735,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   async function onCapaFile(e, setter) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setter(await fileToDataUrl(file));
+    setter(await fileParaDataUrlOtimizado(file));
   }
   function salvar(status) {
     const itens = Object.entries(selecionados).filter(([, v]) => v.on)
@@ -872,7 +913,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
             <div key={cat.id} className={`bg-white border rounded-xl p-4 border-l-4 ${publicado ? "border-l-lime-400 border-stone-200" : inativo ? "border-l-red-300 border-stone-200" : "border-l-stone-300 border-stone-200"} ${inativo ? "opacity-70" : ""}`}>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg border border-dashed border-stone-300 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
-                  {cat.capa ? <img src={cat.capa} alt="Capa" className="w-full h-full object-cover" /> : <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.corDestaque || CATALOGO_COR_PADRAO }} />}
+                  {catalogoCapaSrc(cat) ? <img src={catalogoCapaSrc(cat)} alt="Capa" loading="lazy" className="w-full h-full object-cover" /> : <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.corDestaque || CATALOGO_COR_PADRAO }} />}
                 </div>
                 <div className="min-w-0">
                   <div className="text-[10px] font-bold uppercase tracking-wide text-stone-400">{SETORES[cat.setor]}</div>
@@ -1072,6 +1113,11 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
     setEditing(null);
   }
   function remover(id) { if (confirm("Remover este produto?")) setProdutos(produtos.filter((p) => p.id !== id)); }
+  // Imagem não vem mais na listagem (ver server/routes/produtos.js) — busca só ao entrar na edição.
+  async function editar(p) {
+    const imagem = p.temImagem ? await urlParaDataUrl(api.produtos.imagemUrl(p.id)) : "";
+    setEditing({ ...p, imagem });
+  }
 
   return (
     <section>
@@ -1107,9 +1153,9 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
             {filtro.filtrados.map((p) => (
               <tr key={p.id} className="border-t border-stone-100">
                 <td className="px-4 py-2.5">
-                  {p.imagem ? (
+                  {produtoImgSrc(p) ? (
                     <div className="w-8 h-8 rounded-md bg-stone-100 flex items-center justify-center overflow-hidden">
-                      <img src={p.imagem} alt={p.nome} className="w-full h-full object-contain" />
+                      <img src={produtoImgSrc(p)} alt={p.nome} loading="lazy" className="w-full h-full object-contain" />
                     </div>
                   ) : (
                     <span className="text-xl">{p.emoji}</span>
@@ -1138,7 +1184,7 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
                 <td className="px-4 py-2.5 text-right font-mono">{vezesPedido[p.id] || 0}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex justify-end gap-1">
-                    <button onClick={() => setEditing(p)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
+                    <button onClick={() => editar(p)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
                     <button onClick={() => remover(p.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
                   </div>
                 </td>
@@ -1162,7 +1208,7 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
   async function onImagemFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await fileParaDataUrlOtimizado(file);
     setF((cur) => ({ ...cur, imagem: dataUrl }));
   }
   const [novoSabor, setNovoSabor] = useState("");
@@ -1982,7 +2028,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
       produtoId, sabor: saborKey === SEM_SABOR ? null : saborKey, quantidade,
       // Carrinho/pedido usam o "Por" (não o à vista) — é o único preço que o cliente vê na tela agora.
       precoVista: item.precoParcelado, nome: produtosMap[produtoId].nome,
-      emoji: produtosMap[produtoId].emoji, imagem: produtosMap[produtoId].imagem,
+      emoji: produtosMap[produtoId].emoji, temImagem: produtosMap[produtoId].temImagem,
       marca: produtosMap[produtoId].marca || "Outras marcas",
     }));
   });
@@ -2057,9 +2103,9 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
           </button>
           <p className="text-stone-500 text-xs mt-3">Atendido por <span className="text-stone-300 font-semibold">{consultor.nome}</span> — o pedido vai direto pro WhatsApp dele.</p>
         </div>
-        <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogo.capa ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
-          {catalogo.capa ? (
-            <img src={catalogo.capa} alt={catalogo.nome} className="w-full h-full object-cover" />
+        <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogoCapaSrc(catalogo) ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
+          {catalogoCapaSrc(catalogo) ? (
+            <img src={catalogoCapaSrc(catalogo)} alt={catalogo.nome} className="w-full h-full object-cover" />
           ) : (
             <div className="text-center">
               <div className="font-black text-xl" style={{ color: accent }}>{catalogo.nome}</div>
@@ -2170,8 +2216,8 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
         <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 px-0 sm:px-4">
           <div className="bg-neutral-900 border border-white/10 w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl overflow-hidden max-h-[92vh] sm:max-h-[85vh] flex flex-col">
             <div className="h-40 sm:h-48 shrink-0 bg-gradient-to-br from-white/10 to-transparent border-b border-dashed flex items-center justify-center relative overflow-hidden" style={{ borderColor: hexToRgba(accent, 0.3) }}>
-              {modalItem.produto.imagem ? (
-                <img src={modalItem.produto.imagem} alt={modalItem.produto.nome} className="w-full h-full object-contain p-4" />
+              {produtoImgSrc(modalItem.produto) ? (
+                <img src={produtoImgSrc(modalItem.produto)} alt={modalItem.produto.nome} className="w-full h-full object-contain p-4" />
               ) : (
                 <span className="text-6xl">{modalItem.produto.emoji}</span>
               )}
@@ -2269,7 +2315,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
                     {itens.map((it) => (
                       <div key={`${it.produtoId}::${it.sabor || ""}`} className="flex items-center gap-3 py-2 border-b border-white/5 last:border-0">
                         <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center text-xl shrink-0 overflow-hidden">
-                          {it.imagem ? <img src={it.imagem} alt={it.nome} className="w-full h-full object-contain" /> : it.emoji}
+                          {it.temImagem ? <img src={api.produtos.imagemUrl(it.produtoId)} alt={it.nome} loading="lazy" className="w-full h-full object-contain" /> : it.emoji}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-sm truncate">{it.nome}{it.sabor && <span className="text-stone-400 font-normal"> ({it.sabor})</span>}</div>
@@ -2310,7 +2356,7 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
       onMouseEnter={(e) => { e.currentTarget.style.borderColor = hexToRgba(cor, 0.5); }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}>
       <div className="aspect-square m-2.5 rounded-lg border-2 border-dashed bg-white/[0.02] flex items-center justify-center relative overflow-hidden" style={{ width: "calc(100% - 20px)", borderColor: hexToRgba(cor, 0.3) }}>
-        {p.imagem ? <img src={p.imagem} alt={p.nome} draggable={false} className="w-full h-full object-contain p-3" /> : <span className="text-5xl">{p.emoji}</span>}
+        {produtoImgSrc(p) ? <img src={produtoImgSrc(p)} alt={p.nome} draggable={false} loading="lazy" className="w-full h-full object-contain p-3" /> : <span className="text-5xl">{p.emoji}</span>}
         {qtd > 0 && <span className="absolute top-1.5 right-1.5 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: cor }}>{qtd}</span>}
       </div>
       <div className="px-3 pb-3">

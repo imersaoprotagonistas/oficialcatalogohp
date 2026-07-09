@@ -38,6 +38,7 @@ export const api = {
     criar: (p) => request("/produtos", { method: "POST", body: p }),
     atualizar: (id, p) => request(`/produtos/${id}`, { method: "PUT", body: p }),
     remover: (id) => request(`/produtos/${id}`, { method: "DELETE" }),
+    imagemUrl: (id) => `${import.meta.env.BASE_URL}api/produtos/${id}/imagem`,
   },
 
   consultores: {
@@ -51,6 +52,7 @@ export const api = {
     listar: () => request("/catalogos"),
     criar: (c) => request("/catalogos", { method: "POST", body: c }),
     atualizar: (id, c) => request(`/catalogos/${id}`, { method: "PUT", body: c }),
+    capaUrl: (id) => `${import.meta.env.BASE_URL}api/catalogos/${id}/capa`,
   },
 
   secoes: {
