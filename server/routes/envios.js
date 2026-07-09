@@ -2,9 +2,14 @@ const { Router } = require("express");
 const { randomUUID } = require("crypto");
 const { pool } = require("../db.js");
 const { requireAuth } = require("../middleware/requireAuth.js");
+const { rateLimit } = require("../middleware/rateLimit.js");
 const { ah } = require("../asyncHandler.js");
 
 const router = Router();
+
+// Rotas públicas (sem login) que recebem um ID vindo da URL: limita tentativas por IP
+// pra dificultar varredura/adivinhação de IDs de envio de outros clientes.
+const limiteConsultaPublica = rateLimit({ janelaMs: 60 * 1000, max: 30 });
 
 function toRow(e) {
   return {
@@ -30,7 +35,7 @@ router.get("/", requireAuth(["gerente", "consultor"]), ah(async (req, res) => {
 }));
 
 // Rota pública: usada pelo próprio visitante pra checar/reabrir seu envio a partir do link.
-router.get("/:id", ah(async (req, res) => {
+router.get("/:id", limiteConsultaPublica, ah(async (req, res) => {
   const { rows } = await pool.query("select * from envios where id = $1", [req.params.id]);
   if (!rows[0]) return res.status(404).json({ erro: "Envio não encontrado." });
   res.json(toRow(rows[0]));
@@ -42,7 +47,7 @@ router.post("/", ah(async (req, res) => {
   if (!b.catalogoId || !b.consultorId) {
     return res.status(400).json({ erro: "catalogoId e consultorId são obrigatórios." });
   }
-  const id = `env_${Date.now()}_${randomUUID().slice(0, 6)}`;
+  const id = randomUUID(); // token não-previsível (antes misturava timestamp com só 6 chars aleatórios)
   const { rows } = await pool.query(
     `insert into envios (id, catalogo_id, consultor_id, cliente_nome, cliente_telefone)
      values ($1,$2,$3,$4,$5) returning *`,
@@ -58,7 +63,7 @@ const COLUNA_POR_CAMPO = {
 };
 
 // Rota pública: o próprio visitante marca os passos do funil (visualizou / carrinho / pedido).
-router.patch("/:id/evento", ah(async (req, res) => {
+router.patch("/:id/evento", limiteConsultaPublica, ah(async (req, res) => {
   const { campo, pedidoDetalhe } = req.body || {};
   const coluna = COLUNA_POR_CAMPO[campo];
   if (!coluna) return res.status(400).json({ erro: "Campo de evento inválido." });

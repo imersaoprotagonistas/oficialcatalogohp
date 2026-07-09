@@ -1,20 +1,24 @@
 const { Router } = require("express");
 const { randomUUID } = require("crypto");
 const { pool } = require("../db.js");
-const { requireAuth } = require("../middleware/requireAuth.js");
+const { requireAuth, optionalAuth } = require("../middleware/requireAuth.js");
 const { hashSenha } = require("../auth.js");
 const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
-// senha_hash nunca sai do servidor
-function toRow(c) {
-  return { id: c.id, nome: c.nome, email: c.email, whatsapp: c.whatsapp, setor: c.setor };
+// senha_hash nunca sai do servidor. whatsapp fica público de propósito (é o número que o
+// cliente usa pra falar com o consultor no catálogo); email só é interno, não tem uso
+// público, então só sai pra quem estiver logado como gerente.
+function toRow(c, incluirEmail) {
+  const row = { id: c.id, nome: c.nome, whatsapp: c.whatsapp, setor: c.setor };
+  if (incluirEmail) row.email = c.email;
+  return row;
 }
 
-router.get("/", ah(async (req, res) => {
+router.get("/", optionalAuth, ah(async (req, res) => {
   const { rows } = await pool.query("select * from consultores order by nome");
-  res.json(rows.map(toRow));
+  res.json(rows.map((c) => toRow(c, req.user?.role === "gerente")));
 }));
 
 router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
@@ -26,7 +30,7 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
     `insert into consultores (id, nome, email, whatsapp, setor, senha_hash) values ($1,$2,$3,$4,$5,$6) returning *`,
     [id, b.nome, b.email, b.whatsapp, b.setor, senhaHash]
   );
-  res.status(201).json(toRow(rows[0]));
+  res.status(201).json(toRow(rows[0], true));
 }));
 
 router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
@@ -38,7 +42,7 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
     [b.nome, b.email, b.whatsapp, b.setor, senhaHash, req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Consultor não encontrado." });
-  res.json(toRow(rows[0]));
+  res.json(toRow(rows[0], true));
 }));
 
 router.delete("/:id", requireAuth(["gerente"]), ah(async (req, res) => {

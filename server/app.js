@@ -12,6 +12,9 @@ const buscasRoutes = require("./routes/buscas.js");
 
 const app = express();
 
+// Necessário pra req.ip refletir o IP real do visitante (a Vercel roda atrás de proxy).
+app.set("trust proxy", 1);
+
 // Evita que qualquer CDN/cache guarde respostas da API.
 app.use((req, res, next) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");

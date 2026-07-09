@@ -2,10 +2,14 @@ const { Router } = require("express");
 const { pool } = require("../db.js");
 const { verificarSenha, gerarToken } = require("../auth.js");
 const { ah } = require("../asyncHandler.js");
+const { rateLimit } = require("../middleware/rateLimit.js");
 
 const router = Router();
 
-router.post("/login", ah(async (req, res) => {
+// Barra força-bruta de senha: 8 tentativas a cada 10 min por IP nesta rota.
+const limiteLogin = rateLimit({ janelaMs: 10 * 60 * 1000, max: 8 });
+
+router.post("/login", limiteLogin, ah(async (req, res) => {
   const { role, consultorId, senha } = req.body || {};
 
   if (role === "gerente") {
