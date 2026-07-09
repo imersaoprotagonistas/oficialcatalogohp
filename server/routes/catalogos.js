@@ -5,8 +5,6 @@ const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
-// Capa em base64 sai por rota própria (/:id/capa), não mais embutida na listagem — ver o
-// mesmo comentário em server/routes/produtos.js.
 function toRow(c) {
   return {
     id: c.id,
@@ -15,7 +13,7 @@ function toRow(c) {
     itens: c.itens,
     status: c.status,
     criadoEm: new Date(c.criado_em).getTime(),
-    temCapa: c.tem_capa ?? !!c.capa,
+    capa: c.capa,
     subtitulo: c.subtitulo,
     corDestaque: c.cor_destaque,
     dataInicio: c.data_inicio, // "AAAA-MM-DD" ou null (catálogo criado antes dessa coluna existir)
@@ -33,26 +31,11 @@ router.get("/", optionalAuth, ah(async (req, res) => {
      where status = 'publicado' and data_fim is not null and data_fim < current_date`
   );
 
-  // Não seleciona a coluna "capa" aqui pelo mesmo motivo de server/routes/produtos.js.
-  const colunas = `id, nome, setor, itens, status, criado_em, (capa is not null) as tem_capa,
-      subtitulo, cor_destaque, data_inicio, data_fim`;
   const isGerente = req.user?.role === "gerente";
   const { rows } = isGerente
-    ? await pool.query(`select ${colunas} from catalogos order by criado_em desc`)
-    : await pool.query(`select ${colunas} from catalogos where status = 'publicado' order by criado_em desc`);
+    ? await pool.query("select * from catalogos order by criado_em desc")
+    : await pool.query("select * from catalogos where status = 'publicado' order by criado_em desc");
   res.json(rows.map(toRow));
-}));
-
-// Serve a capa de verdade (não o JSON), com cache no navegador — sobrescreve o no-store
-// global (server/app.js) só pra esta rota.
-router.get("/:id/capa", ah(async (req, res) => {
-  const { rows } = await pool.query("select capa from catalogos where id = $1", [req.params.id]);
-  const dataUrl = rows[0]?.capa;
-  const m = dataUrl && dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!m) return res.status(404).end();
-  res.set("Cache-Control", "public, max-age=86400");
-  res.set("Content-Type", m[1]);
-  res.send(Buffer.from(m[2], "base64"));
 }));
 
 router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
