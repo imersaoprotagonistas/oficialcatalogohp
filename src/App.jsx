@@ -264,6 +264,12 @@ export default function App() {
         ...criados.map((x) => recurso.criar(x)),
         ...atualizados.map((x) => recurso.atualizar(x.id, x)),
       ]);
+    } catch (e) {
+      // A tela já tinha atualizado otimista (setter(novo) acima) antes de saber se o
+      // servidor aceitou — sem isso, um PUT/POST que falha (rede, sessão, payload) deixava
+      // a tela mostrando algo "salvo" que nunca chegou ao banco, sem nenhum aviso.
+      setter(atual);
+      alert(`Não foi possível salvar: ${e.message || "erro desconhecido"}. Tente novamente.`);
     } finally {
       setSaving(false);
     }
