@@ -92,3 +92,9 @@ create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_re
 -- alter table produtos add column if not exists sabores jsonb not null default '[]';
 -- alter table catalogos add column if not exists data_inicio date;
 -- alter table catalogos add column if not exists data_fim date;
+
+-- O backend só acessa o banco pela role dona das tabelas (bypassa RLS por padrão), então
+-- ligar RLS aqui não muda nada pro app — só impede que a API pública do Supabase
+-- (PostgREST, alcançável com a chave anon) leia/escreva essas tabelas sem passar pelo Express.
+alter table secoes_curadas enable row level security;
+alter table buscas_sem_resultado enable row level security;
