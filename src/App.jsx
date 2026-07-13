@@ -1111,6 +1111,7 @@ function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
 // --- Painel > Produtos ---
 function ProdutosSection({ produtos, setProdutos, envios }) {
   const [editing, setEditing] = useState(null);
+  const imagemRequestRef = useRef(0); // descarta a busca da imagem se o usuário trocar de produto antes dela terminar
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
     marca: "", sabores: [], custo: "", badges: [], notaPromo: "",
     precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
@@ -1131,8 +1132,14 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
   function remover(id) { if (confirm("Remover este produto?")) setProdutos(produtos.filter((p) => p.id !== id)); }
   // Imagem não vem mais na listagem (ver server/routes/produtos.js) — busca só ao entrar na edição.
   async function editar(p) {
+    // Limpa a imagem antiga já — sem isso, o formulário abre mostrando a imagem que sobrou do
+    // produto editado por último até a busca abaixo terminar (podia ser de outro produto).
+    setEditing({ ...p, imagem: "" });
+    const requestId = ++imagemRequestRef.current;
     const imagem = p.temImagem ? await urlParaDataUrl(api.produtos.imagemUrl(p.id)) : "";
-    setEditing({ ...p, imagem });
+    // Se o usuário já trocou de produto (ou cancelou e abriu outro) antes da busca terminar,
+    // descarta o resultado pra não aplicar a imagem errada por cima da seleção atual.
+    if (imagemRequestRef.current === requestId) setEditing((cur) => (cur && cur.id === p.id ? { ...cur, imagem } : cur));
   }
 
   return (
@@ -1141,7 +1148,7 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
           Produtos <span className="text-stone-300 font-normal normal-case">({filtro.filtrados.length} de {produtos.length})</span>
         </h2>
-        <button onClick={() => setEditing(blank)}
+        <button onClick={() => { imagemRequestRef.current += 1; setEditing(blank); }}
           className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
           <Plus size={14} /> Novo produto
         </button>
