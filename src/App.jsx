@@ -81,7 +81,9 @@ const catalogoCapaSrc = (c) => (c?.capa ? c.capa : c?.temCapa ? api.catalogos.ca
 // Baixa uma imagem já salva (das rotas acima) de volta como data URL, pra pré-carregar o
 // formulário de edição sem precisar reenviar o produto/catálogo inteiro só pra manter a foto.
 async function urlParaDataUrl(url) {
-  const res = await fetch(url);
+  // no-store: a rota tem Cache-Control de 24h (bom pra listagem), mas aqui precisamos sempre
+  // da foto atual — senão, depois de trocar a imagem, reabrir a edição mostra a antiga cacheada.
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return "";
   const blob = await res.blob();
   return new Promise((resolve) => {
@@ -704,6 +706,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
   const [copiado, setCopiado] = useState(null);
   const formRef = useRef(null);
+  const capaRequestRef = useRef(0); // descarta a busca da capa se o usuário trocar de catálogo antes dela terminar
 
   useEffect(() => {
     if (criando) formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -715,6 +718,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO);
     setDataInicio(hojeISO()); setDataFim("");
     setEditandoId(null); setCriando(true);
+    capaRequestRef.current += 1; // invalida qualquer busca de capa de uma edição anterior ainda em andamento
   }
   async function iniciarEdicao(cat) {
     const itensPorId = Object.fromEntries(cat.itens.map((it) => [it.produtoId, it]));
@@ -728,9 +732,15 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
     setSelecionados(base);
     setNome(cat.nome); setSetor(cat.setor); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
     setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
+    // Limpa a capa antiga já — sem isso, o formulário abre mostrando a capa que sobrou do
+    // catálogo editado por último até a busca abaixo terminar (podia ser de outro catálogo).
+    setCapa("");
     setEditandoId(cat.id); setCriando(true);
-    // Capa não vem mais na listagem (ver server/routes/catalogos.js) — busca só ao entrar na edição.
-    setCapa(cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "");
+    const requestId = ++capaRequestRef.current;
+    const novaCapa = cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "";
+    // Se o usuário já trocou de catálogo (ou cancelou e abriu outro) antes da busca terminar,
+    // descarta o resultado pra não aplicar a capa errada por cima da seleção atual.
+    if (capaRequestRef.current === requestId) setCapa(novaCapa);
   }
   function trocarSetor(novoSetor) {
     setSetor(novoSetor);
