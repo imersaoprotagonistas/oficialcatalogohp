@@ -1,4 +1,5 @@
 const { Router } = require("express");
+const { createHash } = require("crypto");
 const { pool } = require("../db.js");
 const { optionalAuth, requireAuth } = require("../middleware/requireAuth.js");
 const { ah } = require("../asyncHandler.js");
@@ -44,13 +45,18 @@ router.get("/", optionalAuth, ah(async (req, res) => {
 }));
 
 // Serve a capa de verdade (não o JSON), com cache no navegador — sobrescreve o no-store
-// global (server/app.js) só pra esta rota.
+// global (server/app.js) só pra esta rota. O ETag é um hash do conteúdo, então trocar a capa
+// muda o ETag e o navegador busca a versão nova na hora — antes era "public, max-age=86400"
+// sem validação, e a capa trocada só aparecia depois de 24h pra quem já tinha aberto o link.
 router.get("/:id/capa", ah(async (req, res) => {
   const { rows } = await pool.query("select capa from catalogos where id = $1", [req.params.id]);
   const dataUrl = rows[0]?.capa;
   const m = dataUrl && dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!m) return res.status(404).end();
-  res.set("Cache-Control", "public, max-age=86400");
+  const etag = `"${createHash("sha1").update(dataUrl).digest("hex")}"`;
+  res.set("Cache-Control", "no-cache");
+  res.set("ETag", etag);
+  if (req.headers["if-none-match"] === etag) return res.status(304).end();
   res.set("Content-Type", m[1]);
   res.send(Buffer.from(m[2], "base64"));
 }));
