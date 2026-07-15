@@ -1800,6 +1800,16 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
   const [nomeCliente, setNomeCliente] = useState("");
   const [telCliente, setTelCliente] = useState("");
   const [copiado, setCopiado] = useState(null);
+  const [periodo, setPeriodo] = useState("todos");
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState("");
+
+  const { de, ate } = useMemo(() => calcularIntervaloPeriodo(periodo, dataInicio, dataFim), [periodo, dataInicio, dataFim]);
+  const enviosFiltrados = envios.filter((env) => {
+    if (de !== null && env.criadoEm < de) return false;
+    if (ate !== null && env.criadoEm >= ate) return false;
+    return true;
+  });
 
   function registrar(e) {
     e.preventDefault();
@@ -1850,25 +1860,42 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
       )}
 
       {envios.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-stone-100 space-y-1.5">
-          {envios.map((env) => {
-            const s = statusDe(env);
-            const link = `${linkBase()}#/c/${catalogo.id}/${consultor.id}/${env.id}`;
-            return (
-              <div key={env.id} className="flex items-center justify-between gap-2 bg-stone-50 rounded-lg px-3 py-2 text-xs">
-                <span className="font-medium w-32 truncate">{env.clienteNome}</span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
-                <span className="font-mono text-stone-400 truncate flex-1">{link}</span>
-                <button onClick={() => { navigator.clipboard?.writeText(link); setCopiado(env.id); setTimeout(() => setCopiado(null), 1200); }}
-                  className="inline-flex items-center gap-1 text-stone-500 hover:text-stone-900 shrink-0">
-                  {copiado === env.id ? <Check size={12} /> : <Copy size={12} />}
-                </button>
-                <button onClick={() => onAbrirEnvio(env.id)} className="inline-flex items-center gap-1 text-lime-700 hover:text-lime-900 font-semibold shrink-0">
-                  <Eye size={12} /> Ver
-                </button>
-              </div>
-            );
-          })}
+        <div className="mt-3 pt-3 border-t border-stone-100">
+          <div className="flex flex-wrap items-end gap-2 mb-2">
+            <div className="flex items-center gap-1 text-stone-400 text-[10px] font-bold uppercase tracking-wide pr-0.5"><Filter size={11} /> Período</div>
+            <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1 text-[11px]">
+              {PERIODO_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+            {periodo === "personalizado" && (
+              <>
+                <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1 text-[11px]" />
+                <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="border border-stone-300 rounded-lg px-2 py-1 text-[11px]" />
+              </>
+            )}
+            <span className="text-[11px] text-stone-400">{enviosFiltrados.length} de {envios.length}</span>
+          </div>
+          <div className="space-y-1.5">
+            {enviosFiltrados.length === 0 && <p className="text-[11px] text-stone-400 px-1">Nenhum link nesse período.</p>}
+            {enviosFiltrados.map((env) => {
+              const s = statusDe(env);
+              const link = `${linkBase()}#/c/${catalogo.id}/${consultor.id}/${env.id}`;
+              return (
+                <div key={env.id} className="flex items-center justify-between gap-2 bg-stone-50 rounded-lg px-3 py-2 text-xs">
+                  <span className="font-medium w-32 truncate">{env.clienteNome}</span>
+                  <span className="text-stone-400 text-[10px] w-14 shrink-0">{new Date(env.criadoEm).toLocaleDateString("pt-BR")}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
+                  <span className="font-mono text-stone-400 truncate flex-1">{link}</span>
+                  <button onClick={() => { navigator.clipboard?.writeText(link); setCopiado(env.id); setTimeout(() => setCopiado(null), 1200); }}
+                    className="inline-flex items-center gap-1 text-stone-500 hover:text-stone-900 shrink-0">
+                    {copiado === env.id ? <Check size={12} /> : <Copy size={12} />}
+                  </button>
+                  <button onClick={() => onAbrirEnvio(env.id)} className="inline-flex items-center gap-1 text-lime-700 hover:text-lime-900 font-semibold shrink-0">
+                    <Eye size={12} /> Ver
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
