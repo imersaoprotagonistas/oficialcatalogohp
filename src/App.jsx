@@ -1012,6 +1012,20 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
 }
 
 
+// Tira acento e caixa alta pra comparar texto livre (título da seção) com a categoria do produto.
+function normalizarTexto(s) {
+  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+// Acha, entre as categorias existentes, qual "cabe dentro" do título da seção — ex: título
+// "Show de Proteínas" casa com a categoria "Proteínas" (singular/plural tolerado tirando o "s" final).
+function categoriaDaSecao(titulo, categoriasDisponiveis) {
+  const tituloNorm = normalizarTexto(titulo);
+  return categoriasDisponiveis.find((cat) => {
+    const raiz = normalizarTexto(cat).replace(/s$/, "");
+    return raiz.length > 2 && tituloNorm.includes(raiz);
+  });
+}
+
 // --- Painel > Seções curadas (título/descrição/ativo/ordem por setor) ---
 // A cor de cada seção fica fixa aqui, ligada à chave do badge — só o texto e o
 // liga/desliga/ordem são editáveis pelo gerente (decisão de produto).
@@ -1030,6 +1044,7 @@ function SecoesSection({ secoes, atualizarSecao }) {
       </div>
       <p className="text-xs text-stone-400 mb-4 max-w-2xl">
         Título, descrição, se aparece e em que ordem — pra cada setor. A cor de cada seção é fixa (ligada ao tipo de badge do produto).
+        Renomear pra algo como "Show de Proteínas" ou "Show de Creatinas" já puxa automaticamente os produtos daquela categoria — não precisa marcar produto por produto.
       </p>
       <div className="grid lg:grid-cols-2 gap-4">
         {["primeira", "farm"].map((setor) => (
@@ -2051,6 +2066,15 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   });
 
   const porBadge = (chave) => itensFiltrados.filter((it) => (it.produto.badges || []).includes(chave));
+  // O título da seção é livre (o gerente renomeia pra "Show de Proteínas", "Show de Creatinas" etc.),
+  // então os produtos dela são resolvidos automaticamente pela categoria que casa com esse título.
+  // Só cai pro badge fixo (marca_exclusiva/lancamento/oferta/mais_vendido) quando o título não
+  // corresponde a nenhuma categoria existente — caso de seções como "Ofertas" e "Mais Vendidos".
+  const itensDaSecao = (secao) => {
+    const categoria = categoriaDaSecao(secao.titulo, categoriasPresentes);
+    if (categoria) return itensFiltrados.filter((it) => (it.produto.categoria || "Outros") === categoria);
+    return porBadge(secao.chave);
+  };
   // Dentro de cada seção curada, agrupa por marca — sem isso, seções com produtos de
   // marcas diferentes (ex: "Marcas Exclusivas") viravam uma lista única sem separação.
   const agruparPorMarca = (itens) => {
@@ -2063,7 +2087,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const secoesCuradas = (secoes || [])
     .filter((s) => s.setor === catalogo.setor && s.ativo)
     .sort((a, b) => a.ordem - b.ordem)
-    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
+    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: itensDaSecao(s) }))
     .filter((s) => s.itens.length > 0)
     .map((s) => ({ ...s, grupos: agruparPorMarca(s.itens) }));
 
