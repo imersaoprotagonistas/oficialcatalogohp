@@ -9,12 +9,6 @@ import { api } from "./api.js";
 
 const SETORES = { primeira: "1º Compra", farm: "Farm" };
 const CATEGORIA_SUGESTOES = ["Proteínas", "Creatina", "Aminoácidos", "Vitaminas", "Pré-treino", "Snacks", "Acessórios", "Outros"];
-const BADGE_CONFIG = {
-  marca_exclusiva: { label: "Marca exclusiva", cls: "bg-orange-500/15 text-orange-400 border border-orange-500/30" },
-  lancamento: { label: "Lançamento", cls: "bg-sky-500/15 text-sky-400 border border-sky-500/30" },
-  oferta: { label: "Oferta", cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
-  mais_vendido: { label: "Mais vendido", cls: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
-};
 const CATEGORIA_DOT = {
   "Proteínas": "bg-red-500", "Creatina": "bg-emerald-500", "Aminoácidos": "bg-lime-500",
   "Vitaminas": "bg-sky-500", "Pré-treino": "bg-violet-500", "Snacks": "bg-cyan-500",
@@ -598,7 +592,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             )}
             <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
               setCatalogos={setCatalogos} onSimular={onSimular} />
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} />
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} secoes={secoes} />
           </div>
         </>
       )}
@@ -1012,20 +1006,6 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
 }
 
 
-// Tira acento e caixa alta pra comparar texto livre (título da seção) com a categoria do produto.
-function normalizarTexto(s) {
-  return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-// Acha, entre as categorias existentes, qual "cabe dentro" do título da seção — ex: título
-// "Show de Proteínas" casa com a categoria "Proteínas" (singular/plural tolerado tirando o "s" final).
-function categoriaDaSecao(titulo, categoriasDisponiveis) {
-  const tituloNorm = normalizarTexto(titulo);
-  return categoriasDisponiveis.find((cat) => {
-    const raiz = normalizarTexto(cat).replace(/s$/, "");
-    return raiz.length > 2 && tituloNorm.includes(raiz);
-  });
-}
-
 // --- Painel > Seções curadas (título/descrição/ativo/ordem por setor) ---
 // A cor de cada seção fica fixa aqui, ligada à chave do badge — só o texto e o
 // liga/desliga/ordem são editáveis pelo gerente (decisão de produto).
@@ -1044,7 +1024,7 @@ function SecoesSection({ secoes, atualizarSecao }) {
       </div>
       <p className="text-xs text-stone-400 mb-4 max-w-2xl">
         Título, descrição, se aparece e em que ordem — pra cada setor. A cor de cada seção é fixa (ligada ao tipo de badge do produto).
-        Renomear pra algo como "Show de Proteínas" ou "Show de Creatinas" já puxa automaticamente os produtos daquela categoria — não precisa marcar produto por produto.
+        O título daqui é o que aparece como selo pra marcar em cada produto (Painel &gt; Produtos) — renomeie a seção primeiro, depois marque os produtos com esse selo.
       </p>
       <div className="grid lg:grid-cols-2 gap-4">
         {["primeira", "farm"].map((setor) => (
@@ -1124,7 +1104,7 @@ function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
 }
 
 // --- Painel > Produtos ---
-function ProdutosSection({ produtos, setProdutos, envios }) {
+function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
   const [editing, setEditing] = useState(null);
   const imagemRequestRef = useRef(0); // descarta a busca da imagem se o usuário trocar de produto antes dela terminar
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
@@ -1132,6 +1112,18 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
     precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
 
   const filtro = useFiltroProdutos(produtos);
+
+  // O selo do cadastro é sempre o título atual da seção — marcar o selo é o que coloca o
+  // produto naquela seção do catálogo (ver porBadge em CatalogoPublico). Deduplicado por chave
+  // porque a mesma seção existe uma vez por setor (farm/1º compra) com o mesmo título.
+  const selosDisponiveis = useMemo(() => {
+    const vistos = new Set();
+    return (secoes || []).filter((s) => {
+      if (vistos.has(s.chave)) return false;
+      vistos.add(s.chave);
+      return true;
+    });
+  }, [secoes]);
 
   const vezesPedido = useMemo(() => {
     const m = {};
@@ -1169,7 +1161,7 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
         </button>
       </div>
 
-      {editing && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={() => setEditing(null)} />}
+      {editing && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={() => setEditing(null)} selos={selosDisponiveis} />}
 
       <FiltroProdutosBar f={filtro} />
 
@@ -1239,7 +1231,7 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
   );
 }
 
-function ProdutoForm({ inicial, onSalvar, onCancelar }) {
+function ProdutoForm({ inicial, onSalvar, onCancelar, selos }) {
   const [f, setF] = useState(inicial);
   const setPreco = (setor, tipo, val) => setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], [tipo]: val } } });
   const toggleBadge = (b) => setF({ ...f, badges: f.badges?.includes(b) ? f.badges.filter((x) => x !== b) : [...(f.badges || []), b] });
@@ -1352,10 +1344,10 @@ function ProdutoForm({ inicial, onSalvar, onCancelar }) {
       <div>
         <label className="text-[11px] text-stone-400 block mb-1.5">Selos (aparecem na página do cliente)</label>
         <div className="flex flex-wrap gap-2">
-          {Object.entries(BADGE_CONFIG).map(([key, cfg]) => (
-            <button key={key} type="button" onClick={() => toggleBadge(key)}
-              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${f.badges?.includes(key) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500"}`}>
-              {cfg.label}
+          {(selos || []).map((s) => (
+            <button key={s.chave} type="button" onClick={() => toggleBadge(s.chave)}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${f.badges?.includes(s.chave) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500"}`}>
+              {s.titulo}
             </button>
           ))}
         </div>
@@ -2033,8 +2025,6 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const [showCart, setShowCart] = useState(false);
   const [busca, setBusca] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("todas");
-  const [showFiltros, setShowFiltros] = useState(false);
-  const [badgesFiltro, setBadgesFiltro] = useState([]);
   const [modalItem, setModalItem] = useState(null);
   const registrouVisita = useRef(false);
   const registrouCarrinho = useRef(false);
@@ -2061,20 +2051,10 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const itensFiltrados = itensValidos.filter((it) => {
     if (categoriaFiltro !== "todas" && (it.produto.categoria || "Outros") !== categoriaFiltro) return false;
     if (busca.trim() && !it.produto.nome.toLowerCase().includes(busca.trim().toLowerCase())) return false;
-    if (badgesFiltro.length > 0 && !badgesFiltro.some((b) => (it.produto.badges || []).includes(b))) return false;
     return true;
   });
 
   const porBadge = (chave) => itensFiltrados.filter((it) => (it.produto.badges || []).includes(chave));
-  // O título da seção é livre (o gerente renomeia pra "Show de Proteínas", "Show de Creatinas" etc.),
-  // então os produtos dela são resolvidos automaticamente pela categoria que casa com esse título.
-  // Só cai pro badge fixo (marca_exclusiva/lancamento/oferta/mais_vendido) quando o título não
-  // corresponde a nenhuma categoria existente — caso de seções como "Ofertas" e "Mais Vendidos".
-  const itensDaSecao = (secao) => {
-    const categoria = categoriaDaSecao(secao.titulo, categoriasPresentes);
-    if (categoria) return itensFiltrados.filter((it) => (it.produto.categoria || "Outros") === categoria);
-    return porBadge(secao.chave);
-  };
   // Dentro de cada seção curada, agrupa por marca — sem isso, seções com produtos de
   // marcas diferentes (ex: "Marcas Exclusivas") viravam uma lista única sem separação.
   const agruparPorMarca = (itens) => {
@@ -2087,7 +2067,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const secoesCuradas = (secoes || [])
     .filter((s) => s.setor === catalogo.setor && s.ativo)
     .sort((a, b) => a.ordem - b.ordem)
-    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: itensDaSecao(s) }))
+    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
     .filter((s) => s.itens.length > 0)
     .map((s) => ({ ...s, grupos: agruparPorMarca(s.itens) }));
 
@@ -2198,24 +2178,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
               <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar produto..."
                 className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500/50" />
             </div>
-            {Object.keys(BADGE_CONFIG).length > 0 && (
-              <button onClick={() => setShowFiltros(!showFiltros)}
-                className={`inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide rounded-lg px-3.5 py-2 border ${showFiltros ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
-                <Filter size={13} /> Filtros
-              </button>
-            )}
           </div>
-
-          {showFiltros && (
-            <div className="flex flex-wrap gap-1.5 pb-1">
-              {Object.entries(BADGE_CONFIG).map(([key, cfg]) => (
-                <button key={key} onClick={() => setBadgesFiltro((b) => b.includes(key) ? b.filter((x) => x !== key) : [...b, key])}
-                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${badgesFiltro.includes(key) ? cfg.cls : "border-white/15 text-stone-400"}`}>
-                  {cfg.label}
-                </button>
-              ))}
-            </div>
-          )}
 
           <div className="flex gap-2 overflow-x-auto pb-1">
             <button onClick={() => setCategoriaFiltro("todas")}
@@ -2303,13 +2266,6 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
               <div className="text-stone-400 text-xs mt-0.5">{modalItem.produto.gramatura}</div>
               {modalItem.produto.descricao && <p className="text-stone-300 text-sm mt-2.5">{modalItem.produto.descricao}</p>}
 
-              {(modalItem.produto.badges || []).length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-3">
-                  {modalItem.produto.badges.map((b) => BADGE_CONFIG[b] && (
-                    <span key={b} className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${BADGE_CONFIG[b].cls}`}>{BADGE_CONFIG[b].label}</span>
-                  ))}
-                </div>
-              )}
               {modalItem.produto.notaPromo && <p className="text-amber-400 text-xs mt-2">✦ {modalItem.produto.notaPromo}</p>}
 
               <div className="mt-4">
@@ -2441,13 +2397,6 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
           <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[p.categoria] || "bg-stone-400"}`} /> {p.categoria}
         </div>
 
-        {(p.badges || []).length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-2">
-            {p.badges.slice(0, 2).map((b) => BADGE_CONFIG[b] && (
-              <span key={b} className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${BADGE_CONFIG[b].cls}`}>{BADGE_CONFIG[b].label}</span>
-            ))}
-          </div>
-        )}
         {p.notaPromo && <p className="text-amber-400 text-[10px] mt-1.5">✦ {p.notaPromo}</p>}
         {(p.sabores?.length || 0) >= 2 && (
           <p className="text-stone-400 text-[10px] mt-1.5">{p.sabores.length} sabores disponíveis</p>
