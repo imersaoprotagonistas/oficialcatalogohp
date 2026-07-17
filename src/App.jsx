@@ -1198,15 +1198,24 @@ function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
   }
   function remover(id) { if (confirm("Remover este produto?")) setProdutos(produtos.filter((p) => p.id !== id)); }
   // Imagem não vem mais na listagem (ver server/routes/produtos.js) — busca só ao entrar na edição.
+  const [carregandoImagem, setCarregandoImagem] = useState(false);
   async function editar(p) {
-    // Limpa a imagem antiga já — sem isso, o formulário abre mostrando a imagem que sobrou do
-    // produto editado por último até a busca abaixo terminar (podia ser de outro produto).
-    setEditing({ ...p, imagem: "" });
+    // Só monta o formulário quando a foto real já chegou — ProdutoForm guarda o estado inicial
+    // uma única vez (useState), então abrir o form antes com imagem vazia "congela" esse vazio:
+    // ele nunca é atualizado depois, e salvar manda imagem="" por cima da foto que já existia.
     const requestId = ++imagemRequestRef.current;
+    setEditing(null);
+    setCarregandoImagem(true);
     const imagem = p.temImagem ? await urlParaDataUrl(api.produtos.imagemUrl(p.id)) : "";
-    // Se o usuário já trocou de produto (ou cancelou e abriu outro) antes da busca terminar,
-    // descarta o resultado pra não aplicar a imagem errada por cima da seleção atual.
-    if (imagemRequestRef.current === requestId) setEditing((cur) => (cur && cur.id === p.id ? { ...cur, imagem } : cur));
+    // Se o usuário já trocou de produto (ou cancelou) antes da busca terminar, descarta o resultado.
+    if (imagemRequestRef.current !== requestId) return;
+    setCarregandoImagem(false);
+    setEditing({ ...p, imagem });
+  }
+  function cancelarEdicao() {
+    imagemRequestRef.current += 1; // descarta qualquer busca de imagem pendente
+    setCarregandoImagem(false);
+    setEditing(null);
   }
 
   return (
@@ -1215,13 +1224,18 @@ function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
           Produtos <span className="text-stone-300 font-normal normal-case">({filtro.filtrados.length} de {produtos.length})</span>
         </h2>
-        <button onClick={() => { imagemRequestRef.current += 1; setEditing(blank); }}
+        <button onClick={() => { imagemRequestRef.current += 1; setCarregandoImagem(false); setEditing(blank); }}
           className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
           <Plus size={14} /> Novo produto
         </button>
       </div>
 
-      {editing && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={() => setEditing(null)} selos={selosDisponiveis} />}
+      {carregandoImagem && (
+        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-4 text-xs text-stone-400">
+          Carregando produto…
+        </div>
+      )}
+      {editing && !carregandoImagem && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} selos={selosDisponiveis} />}
 
       <FiltroProdutosBar f={filtro} />
 

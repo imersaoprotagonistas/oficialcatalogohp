@@ -71,11 +71,14 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
 
 router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
+  // imagem usa coalesce(nullif(...)): se o campo não vier (undefined -> null aqui) preserva a
+  // foto atual em vez de apagá-la — mesma proteção que capa já tem em server/routes/catalogos.js.
   const { rows } = await pool.query(
-    `update produtos set nome=$1, gramatura=$2, categoria=$3, descricao=$4, emoji=$5, imagem=$6, ativo=$7,
+    `update produtos set nome=$1, gramatura=$2, categoria=$3, descricao=$4, emoji=$5,
+       imagem=coalesce($6, imagem), ativo=$7,
        marca=$8, sabores=$9, custo=$10, badges=$11, nota_promo=$12, precos=$13
      where id=$14 returning *`,
-    [b.nome, b.gramatura, b.categoria, b.descricao, b.emoji, b.imagem, b.ativo ?? true, b.marca,
+    [b.nome, b.gramatura, b.categoria, b.descricao, b.emoji, b.imagem ?? null, b.ativo ?? true, b.marca,
       JSON.stringify(b.sabores || []), b.custo || 0, JSON.stringify(b.badges || []), b.notaPromo, JSON.stringify(b.precos || {}), req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Produto não encontrado." });
