@@ -57,6 +57,7 @@ export const api = {
 
   secoes: {
     listar: () => request("/secoes"),
+    criar: (s) => request("/secoes", { method: "POST", body: s }),
     atualizar: (id, s) => request(`/secoes/${id}`, { method: "PUT", body: s }),
   },
 

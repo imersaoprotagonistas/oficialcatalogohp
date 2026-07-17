@@ -33,4 +33,28 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   res.json(toRow(rows[0]));
 }));
 
+// Cria uma seção nova (setor x chave). Cada seção mora na sua própria linha, então criar
+// uma não mexe nas seções já existentes/vigentes na vitrine.
+router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
+  const b = req.body || {};
+  const setor = b.setor;
+  const chave = String(b.chave || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const titulo = String(b.titulo || "").trim();
+
+  if (!["farm", "primeira"].includes(setor)) return res.status(400).json({ erro: "Setor inválido." });
+  if (!chave) return res.status(400).json({ erro: "Chave da seção é obrigatória." });
+  if (!titulo) return res.status(400).json({ erro: "Título é obrigatório." });
+
+  const id = `${setor}_${chave}`;
+  const { rows } = await pool.query(
+    `insert into secoes_curadas (id, setor, chave, titulo, descricao, ativo, ordem)
+     values ($1,$2,$3,$4,$5,$6,$7)
+     on conflict (id) do nothing
+     returning *`,
+    [id, setor, chave, titulo, b.descricao || null, b.ativo ?? true, b.ordem ?? 0]
+  );
+  if (!rows[0]) return res.status(409).json({ erro: "Já existe uma seção com essa chave nesse setor." });
+  res.status(201).json(toRow(rows[0]));
+}));
+
 module.exports = router;

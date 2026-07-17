@@ -274,12 +274,24 @@ export default function App() {
   function setConsultores(v) { persistirColecao(api.consultores, consultores, v, setConsultoresState); }
   function setCatalogos(v) { persistirColecao(api.catalogos, catalogos, v, setCatalogosState); }
 
-  // Seções curadas são fixas (setor x chave de badge) — só edição, nunca criação/remoção.
   async function atualizarSecao(id, patch) {
     setSaving(true);
     try {
       const atualizado = await api.secoes.atualizar(id, patch);
       setSecoes((atual) => atual.map((s) => (s.id === id ? atualizado : s)));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Cada seção mora na sua própria linha (setor x chave) — criar uma nova nunca sobrescreve
+  // as que já estão vigentes na vitrine.
+  async function criarSecao(dados) {
+    setSaving(true);
+    try {
+      const nova = await api.secoes.criar(dados);
+      setSecoes((atual) => [...atual, nova]);
+      return nova;
     } finally {
       setSaving(false);
     }
@@ -366,7 +378,7 @@ export default function App() {
           produtos={produtos} setProdutos={setProdutos}
           consultores={consultores} setConsultores={setConsultores}
           catalogos={catalogos} setCatalogos={setCatalogos}
-          secoes={secoes} atualizarSecao={atualizarSecao}
+          secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao}
           envios={envios} buscas={buscas} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
@@ -543,7 +555,7 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
@@ -613,7 +625,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             { label: "Total", value: secoes.length },
           ]} />
           <div className="max-w-6xl mx-auto px-6 py-8">
-            <SecoesSection secoes={secoes} atualizarSecao={atualizarSecao} />
+            <SecoesSection secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao} />
           </div>
         </>
       )}
@@ -1007,8 +1019,8 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
 
 
 // --- Painel > Seções curadas (título/descrição/ativo/ordem por setor) ---
-// A cor de cada seção fica fixa aqui, ligada à chave do badge — só o texto e o
-// liga/desliga/ordem são editáveis pelo gerente (decisão de produto).
+// A cor de cada seção fica ligada à chave do badge; chaves novas (criadas pelo gerente)
+// caem no cinza neutro do fallback abaixo até alguém adicionar uma cor dedicada.
 const SECOES_COR = {
   marca_exclusiva: "bg-orange-500",
   lancamento: "bg-sky-500",
@@ -1016,28 +1028,34 @@ const SECOES_COR = {
   mais_vendido: "bg-amber-500",
 };
 
-function SecoesSection({ secoes, atualizarSecao }) {
+function SecoesSection({ secoes, atualizarSecao, criarSecao }) {
   return (
     <section>
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Seções curadas do catálogo</h2>
       </div>
       <p className="text-xs text-stone-400 mb-4 max-w-2xl">
-        Título, descrição, se aparece e em que ordem — pra cada setor. A cor de cada seção é fixa (ligada ao tipo de badge do produto).
+        Título, descrição, se aparece e em que ordem — pra cada setor. Criar uma seção nova não mexe nas que já
+        estão vigentes na vitrine — cada uma vive separada.
         O título daqui é o que aparece como selo pra marcar em cada produto (Painel &gt; Produtos) — renomeie a seção primeiro, depois marque os produtos com esse selo.
       </p>
       <div className="grid lg:grid-cols-2 gap-4">
         {["primeira", "farm"].map((setor) => (
           <SetorSecoes key={setor} setor={setor}
             secoes={secoes.filter((s) => s.setor === setor).sort((a, b) => a.ordem - b.ordem)}
-            atualizarSecao={atualizarSecao} />
+            atualizarSecao={atualizarSecao} criarSecao={criarSecao} />
         ))}
       </div>
     </section>
   );
 }
 
-function SetorSecoes({ setor, secoes, atualizarSecao }) {
+function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao }) {
+  const [criando, setCriando] = useState(false);
+  const [titulo, setTitulo] = useState("");
+  const [erro, setErro] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
   function mover(index, delta) {
     const alvo = secoes[index];
     const vizinho = secoes[index + delta];
@@ -1046,15 +1064,57 @@ function SetorSecoes({ setor, secoes, atualizarSecao }) {
     atualizarSecao(vizinho.id, { ...vizinho, ordem: alvo.ordem });
   }
 
+  async function salvarNova() {
+    if (!titulo.trim()) return;
+    setSalvando(true);
+    setErro("");
+    try {
+      const proximaOrdem = secoes.length ? Math.max(...secoes.map((s) => s.ordem)) + 1 : 0;
+      await criarSecao({ setor, chave: titulo, titulo: titulo.trim(), ordem: proximaOrdem, ativo: true });
+      setTitulo("");
+      setCriando(false);
+    } catch (e) {
+      setErro(e.message || "Não deu pra criar a seção.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
   return (
     <div className="bg-white border border-stone-200 rounded-xl p-4">
-      <h3 className="text-xs font-bold uppercase tracking-wide text-stone-500 mb-3">{SETORES[setor]}</h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-stone-500">{SETORES[setor]}</h3>
+        {!criando && (
+          <button onClick={() => setCriando(true)}
+            className="text-[11px] font-bold uppercase tracking-wide text-stone-500 hover:text-stone-800 flex items-center gap-1">
+            <Plus size={12} /> Nova seção
+          </button>
+        )}
+      </div>
       <div className="space-y-2.5">
         {secoes.map((s, i) => (
           <SecaoCard key={s.id} secao={s} atualizarSecao={atualizarSecao}
             onSubir={i > 0 ? () => mover(i, -1) : null}
             onDescer={i < secoes.length - 1 ? () => mover(i, 1) : null} />
         ))}
+        {criando && (
+          <div className="border border-dashed border-stone-300 rounded-lg p-3 space-y-2">
+            <input value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus
+              placeholder="Título da nova seção"
+              className="w-full text-sm border border-stone-200 rounded px-2 py-1.5" />
+            {erro && <p className="text-[11px] text-red-600">{erro}</p>}
+            <div className="flex items-center gap-2">
+              <button onClick={salvarNova} disabled={!titulo.trim() || salvando}
+                className="text-[11px] font-bold uppercase tracking-wide rounded-md px-2.5 py-1 border border-stone-800 bg-stone-800 text-white disabled:opacity-40">
+                {salvando ? "Criando…" : "Criar"}
+              </button>
+              <button onClick={() => { setCriando(false); setTitulo(""); setErro(""); }}
+                className="text-[11px] font-bold uppercase tracking-wide text-stone-400 hover:text-stone-700 px-2.5 py-1">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
