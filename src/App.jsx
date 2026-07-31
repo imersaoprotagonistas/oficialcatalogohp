@@ -612,7 +612,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             )}
             <CatalogosSection produtos={produtos} setProdutos={setProdutos} consultores={consultores} catalogos={catalogos}
               setCatalogos={setCatalogos} secoes={secoes} onSimular={onSimular} />
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} secoes={secoes} />
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} />
           </div>
         </>
       )}
@@ -1202,7 +1202,7 @@ function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
 }
 
 // --- Painel > Produtos ---
-function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
+function ProdutosSection({ produtos, setProdutos, envios }) {
   const [editing, setEditing] = useState(null);
   const imagemRequestRef = useRef(0); // descarta a busca da imagem se o usuário trocar de produto antes dela terminar
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
@@ -1210,18 +1210,6 @@ function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
     precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
 
   const filtro = useFiltroProdutos(produtos);
-
-  // O selo do cadastro é sempre o título atual da seção — marcar o selo é o que coloca o
-  // produto naquela seção do catálogo (ver porBadge em CatalogoPublico). Deduplicado por chave
-  // porque a mesma seção existe uma vez por setor (farm/1º compra) com o mesmo título.
-  const selosDisponiveis = useMemo(() => {
-    const vistos = new Set();
-    return (secoes || []).filter((s) => {
-      if (vistos.has(s.chave)) return false;
-      vistos.add(s.chave);
-      return true;
-    });
-  }, [secoes]);
 
   const vezesPedido = useMemo(() => {
     const m = {};
@@ -1273,7 +1261,7 @@ function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
           Carregando produto…
         </div>
       )}
-      {editing && !carregandoImagem && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} selos={selosDisponiveis} />}
+      {editing && !carregandoImagem && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas} />}
 
       <FiltroProdutosBar f={filtro} />
 
@@ -1343,10 +1331,9 @@ function ProdutosSection({ produtos, setProdutos, envios, secoes }) {
   );
 }
 
-function ProdutoForm({ inicial, onSalvar, onCancelar, selos }) {
+function ProdutoForm({ inicial, onSalvar, onCancelar, marcas }) {
   const [f, setF] = useState(inicial);
   const setPreco = (setor, tipo, val) => setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], [tipo]: val } } });
-  const toggleBadge = (b) => setF({ ...f, badges: f.badges?.includes(b) ? f.badges.filter((x) => x !== b) : [...(f.badges || []), b] });
   async function onImagemFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1408,16 +1395,12 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, selos }) {
           </div>
         </div>
       </div>
-      <div className="grid sm:grid-cols-4 gap-3">
+      <div className="grid sm:grid-cols-3 gap-3">
         <div>
-          <label className="text-[11px] text-stone-400 block mb-1">Ícone (emoji)</label>
-          <input value={f.emoji} onChange={(e) => setF({ ...f, emoji: e.target.value })}
+          <label className="text-[11px] text-stone-400 block mb-1">Marca</label>
+          <input required list="marcas-existentes" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
             className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-        </div>
-        <div>
-          <label className="text-[11px] text-stone-400 block mb-1">Marca (opcional)</label>
-          <input value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
-            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <datalist id="marcas-existentes">{(marcas || []).map((m) => <option key={m} value={m} />)}</datalist>
         </div>
         <div>
           <label className="text-[11px] text-stone-400 block mb-1">Custo (R$)</label>
@@ -1451,17 +1434,6 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, selos }) {
             className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-50">
             Adicionar
           </button>
-        </div>
-      </div>
-      <div>
-        <label className="text-[11px] text-stone-400 block mb-1.5">Selos (aparecem na página do cliente)</label>
-        <div className="flex flex-wrap gap-2">
-          {(selos || []).map((s) => (
-            <button key={s.chave} type="button" onClick={() => toggleBadge(s.chave)}
-              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${f.badges?.includes(s.chave) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500"}`}>
-              {s.titulo}
-            </button>
-          ))}
         </div>
       </div>
       <div className="grid sm:grid-cols-2 gap-4 pt-2">
