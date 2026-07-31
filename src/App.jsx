@@ -761,7 +761,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
   }
   function salvar(status) {
     const itens = Object.entries(selecionados).filter(([, v]) => v.on)
-      .map(([produtoId, v]) => ({ produtoId, precoDe: Number(v.de) || 0, precoVista: Number(v.vista) || 0, precoParcelado: Number(v.parcelado) || 0 }));
+      .map(([produtoId, v]) => ({ produtoId, precoDe: Number(v.de) || 0, precoVista: round2((Number(v.parcelado) || 0) * 0.97), precoParcelado: Number(v.parcelado) || 0 }));
     if (!nome.trim() || itens.length === 0) { alert("Dê um nome ao catálogo e selecione ao menos 1 produto."); return; }
     if (!dataInicio || !dataFim) { alert("Defina a data de início e de término da validade do catálogo."); return; }
     if (dataFim < dataInicio) { alert("A data de término não pode ser antes da data de início."); return; }
@@ -870,19 +870,20 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                   {itens.map((p) => {
                     const sel = selecionados[p.id] || {};
                     const calc = calcularPrecoSetor({ de: sel.de, desconto: p.precos?.[setor]?.desconto, custo: p.custo });
-                    const bate = Math.abs(round2(sel.parcelado || 0) - calc.por) < 0.01 && Math.abs(round2(sel.vista || 0) - calc.vista) < 0.01;
-                    const vistaDigitado = round2(sel.vista || 0);
-                    const margemReal = round2(vistaDigitado - round2(p.custo || 0));
-                    const margemRealPct = vistaDigitado > 0 ? round2((margemReal / vistaDigitado) * 100) : 0;
+                    const parceladoNum = round2(sel.parcelado || 0);
+                    const vistaCalc = round2(parceladoNum * 0.97); // à vista não é editável: sempre 3% sobre o Por
+                    const bate = Math.abs(parceladoNum - calc.por) < 0.01;
+                    const margemReal = round2(vistaCalc - round2(p.custo || 0));
+                    const margemRealPct = vistaCalc > 0 ? round2((margemReal / vistaCalc) * 100) : 0;
                     const corReal = corMargem(margemRealPct);
-                    const dica = `Margem com o preço à vista digitado: ${formatBRL(margemReal)} (${formatPct(margemRealPct)}) — ${corReal.label}.\n`
+                    const dica = `Margem com o preço à vista (3% sobre o Por): ${formatBRL(margemReal)} (${formatPct(margemRealPct)}) — ${corReal.label}.\n`
                       + `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
                       + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
                     return (
                     <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
-                      <span className="flex-1 min-w-[140px]">{p.emoji} {p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
+                      <span className="flex-1 min-w-[140px]">{p.emoji} {p.marca ? `${p.marca} ` : ""}{p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
                       <div className="flex flex-col items-center">
                         <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">De</span>
                         <input type="number" step="0.01" value={selecionados[p.id]?.de ?? 0}
@@ -897,9 +898,18 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                       </div>
                       <div className="flex flex-col items-center">
                         <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">À vista</span>
-                        <input type="number" step="0.01" value={selecionados[p.id]?.vista ?? 0}
-                          onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], vista: e.target.value } })}
-                          className={`w-20 border rounded px-2 py-1 text-xs font-mono ${bate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} title="Preço à vista" />
+                        <div className="w-20 border border-stone-200 bg-stone-100 rounded px-2 py-1 text-xs font-mono text-stone-500 text-right"
+                          title="Calculado automaticamente: 3% de desconto sobre o Por (não editável)">
+                          {formatBRL(vistaCalc)}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem %</span>
+                        <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatPct(margemRealPct)}</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem R$</span>
+                        <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatBRL(margemReal)}</span>
                       </div>
                       <span className={`inline-flex items-center gap-1 shrink-0 ${bate ? "" : "opacity-70"}`} title={dica}>
                         <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
