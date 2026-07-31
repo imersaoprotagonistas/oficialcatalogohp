@@ -59,6 +59,7 @@ export const api = {
     listar: () => request("/secoes"),
     criar: (s) => request("/secoes", { method: "POST", body: s }),
     atualizar: (id, s) => request(`/secoes/${id}`, { method: "PUT", body: s }),
+    remover: (id) => request(`/secoes/${id}`, { method: "DELETE" }),
   },
 
   buscas: {

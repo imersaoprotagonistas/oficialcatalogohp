@@ -57,4 +57,17 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
   res.status(201).json(toRow(rows[0]));
 }));
 
+router.delete("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
+  const { rows } = await pool.query("delete from secoes_curadas where id=$1 returning *", [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ erro: "Seção não encontrada." });
+  const secao = rows[0];
+  // Só tira o selo dos produtos se nenhuma outra seção (do outro setor) ainda usar essa
+  // mesma chave — senão apagaria um selo que continua válido lá.
+  const { rows: restantes } = await pool.query("select 1 from secoes_curadas where chave=$1 limit 1", [secao.chave]);
+  if (restantes.length === 0) {
+    await pool.query(`update produtos set badges = (badges - $1) where badges ? $1`, [secao.chave]);
+  }
+  res.json(toRow(secao));
+}));
+
 module.exports = router;

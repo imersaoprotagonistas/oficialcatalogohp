@@ -305,6 +305,19 @@ export default function App() {
     }
   }
 
+  // Apagar a seção também tira o selo dos produtos que a usavam (ver server/routes/secoes.js)
+  // — recarrega produtos pra refletir isso sem precisar dar F5.
+  async function removerSecao(id) {
+    setSaving(true);
+    try {
+      await api.secoes.remover(id);
+      setSecoes((atual) => atual.filter((s) => s.id !== id));
+      setProdutosState(await api.produtos.listar());
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function criarEnvio(catalogoId, consultorId, clienteNome, clienteTelefone) {
     const novo = await api.envios.criar({ catalogoId, consultorId, clienteNome, clienteTelefone });
     setEnvios((atual) => [novo, ...atual]);
@@ -386,7 +399,7 @@ export default function App() {
           produtos={produtos} setProdutos={setProdutos}
           consultores={consultores} setConsultores={setConsultores}
           catalogos={catalogos} setCatalogos={setCatalogos}
-          secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao}
+          secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao} removerSecao={removerSecao}
           envios={envios} buscas={buscas} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
@@ -563,7 +576,7 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, removerSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
@@ -633,7 +646,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             { label: "Total", value: secoes.length },
           ]} />
           <div className="max-w-6xl mx-auto px-6 py-8">
-            <SecoesSection secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao} />
+            <SecoesSection secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao} removerSecao={removerSecao} />
           </div>
         </>
       )}
@@ -1066,7 +1079,7 @@ const SECOES_COR = {
   mais_vendido: "bg-amber-500",
 };
 
-function SecoesSection({ secoes, atualizarSecao, criarSecao }) {
+function SecoesSection({ secoes, atualizarSecao, criarSecao, removerSecao }) {
   return (
     <section>
       <div className="flex items-center justify-between mb-1">
@@ -1081,14 +1094,14 @@ function SecoesSection({ secoes, atualizarSecao, criarSecao }) {
         {["primeira", "farm"].map((setor) => (
           <SetorSecoes key={setor} setor={setor}
             secoes={secoes.filter((s) => s.setor === setor).sort((a, b) => a.ordem - b.ordem)}
-            atualizarSecao={atualizarSecao} criarSecao={criarSecao} />
+            atualizarSecao={atualizarSecao} criarSecao={criarSecao} removerSecao={removerSecao} />
         ))}
       </div>
     </section>
   );
 }
 
-function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao }) {
+function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao, removerSecao }) {
   const [criando, setCriando] = useState(false);
   const [titulo, setTitulo] = useState("");
   const [erro, setErro] = useState("");
@@ -1131,7 +1144,7 @@ function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao }) {
       </div>
       <div className="space-y-2.5">
         {secoes.map((s, i) => (
-          <SecaoCard key={s.id} secao={s} atualizarSecao={atualizarSecao}
+          <SecaoCard key={s.id} secao={s} atualizarSecao={atualizarSecao} removerSecao={removerSecao}
             onSubir={i > 0 ? () => mover(i, -1) : null}
             onDescer={i < secoes.length - 1 ? () => mover(i, 1) : null} />
         ))}
@@ -1158,7 +1171,7 @@ function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao }) {
   );
 }
 
-function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
+function SecaoCard({ secao, atualizarSecao, removerSecao, onSubir, onDescer }) {
   const [titulo, setTitulo] = useState(secao.titulo);
   const [descricao, setDescricao] = useState(secao.descricao || "");
 
@@ -1166,6 +1179,11 @@ function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
 
   function salvarTitulo() { if (titulo.trim() && titulo !== secao.titulo) atualizarSecao(secao.id, { ...secao, titulo }); }
   function salvarDescricao() { if (descricao !== (secao.descricao || "")) atualizarSecao(secao.id, { ...secao, descricao }); }
+  function excluir() {
+    if (confirm(`Excluir a seção "${secao.titulo}"? Produtos marcados com esse selo deixam de aparecer nela. Essa ação não pode ser desfeita.`)) {
+      removerSecao(secao.id);
+    }
+  }
 
   return (
     <div className={`border rounded-lg p-3 ${secao.ativo ? "border-stone-200" : "border-stone-200 opacity-60"}`}>
@@ -1192,10 +1210,15 @@ function SecaoCard({ secao, atualizarSecao, onSubir, onDescer }) {
         <span className="text-[10px] font-bold uppercase tracking-wide text-stone-400">
           {secao.ativo ? "Aparece no catálogo" : "Oculta do catálogo"}
         </span>
-        <button onClick={() => atualizarSecao(secao.id, { ...secao, ativo: !secao.ativo })}
-          className={`text-[11px] font-bold uppercase tracking-wide rounded-md px-2.5 py-1 border ${secao.ativo ? "border-emerald-200 text-emerald-700 hover:bg-emerald-50" : "border-stone-300 text-stone-500 hover:bg-stone-50"}`}>
-          {secao.ativo ? "Ativa" : "Ativar"}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => atualizarSecao(secao.id, { ...secao, ativo: !secao.ativo })}
+            className={`text-[11px] font-bold uppercase tracking-wide rounded-md px-2.5 py-1 border ${secao.ativo ? "border-emerald-200 text-emerald-700 hover:bg-emerald-50" : "border-stone-300 text-stone-500 hover:bg-stone-50"}`}>
+            {secao.ativo ? "Ativa" : "Ativar"}
+          </button>
+          <button onClick={excluir} title="Excluir seção" className="p-1.5 text-stone-400 hover:text-red-600">
+            <Trash2 size={14} />
+          </button>
+        </div>
       </div>
     </div>
   );
