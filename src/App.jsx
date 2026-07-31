@@ -602,8 +602,8 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
                 </div>
               </div>
             )}
-            <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
-              setCatalogos={setCatalogos} onSimular={onSimular} />
+            <CatalogosSection produtos={produtos} setProdutos={setProdutos} consultores={consultores} catalogos={catalogos}
+              setCatalogos={setCatalogos} secoes={secoes} onSimular={onSimular} />
             <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} secoes={secoes} />
           </div>
         </>
@@ -698,7 +698,7 @@ function FiltroProdutosBar({ f, placeholder }) {
 }
 
 // --- Painel > Catálogos ---
-function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSimular }) {
+function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCatalogos, secoes, onSimular }) {
   const [criando, setCriando] = useState(false);
   const [nome, setNome] = useState("");
   const [setor, setSetor] = useState("farm");
@@ -780,6 +780,15 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
   const filtro = useFiltroProdutos(produtos);
   const porCategoria = filtro.filtrados.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
   const totalSelecionados = Object.values(selecionados).filter((v) => v.on).length;
+  // Seções do setor do catálogo que está sendo montado — dá pra marcar o selo do produto
+  // aqui mesmo, sem sair pra tela de Produtos (ver toggleBadgeProduto).
+  const secoesDoSetor = (secoes || []).filter((s) => s.setor === setor);
+  function toggleBadgeProduto(produtoId, chave) {
+    const alvo = produtos.find((p) => p.id === produtoId);
+    if (!alvo) return;
+    const badges = alvo.badges?.includes(chave) ? alvo.badges.filter((b) => b !== chave) : [...(alvo.badges || []), chave];
+    setProdutos(produtos.map((p) => (p.id === produtoId ? { ...p, badges } : p)));
+  }
 
   return (
     <section>
@@ -896,6 +905,17 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, onSi
                         <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
                         {!bate && <span className="text-amber-600 text-xs">⚠</span>}
                       </span>
+                      {selecionados[p.id]?.on && secoesDoSetor.length > 0 && (
+                        <div className="basis-full flex flex-wrap items-center gap-1.5 pl-7">
+                          <span className="text-[10px] text-stone-400 uppercase font-bold">Seção:</span>
+                          {secoesDoSetor.map((s) => (
+                            <button key={s.chave} type="button" onClick={(e) => { e.preventDefault(); toggleBadgeProduto(p.id, s.chave); }}
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${(p.badges || []).includes(s.chave) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500 hover:border-stone-400"}`}>
+                              {s.titulo}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </label>
                     );
                   })}
