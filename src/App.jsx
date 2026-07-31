@@ -67,6 +67,14 @@ const toWaNumber = (raw) => {
   const digits = String(raw || "").replace(/\D/g, "");
   return digits.startsWith("55") ? digits : `55${digits}`;
 };
+// Nome do produto pro seletor de catálogo: corta a marca do final do nome quando ela já
+// vem embutida lá (ex: "... | Synthesize") — sem isso, prefixar a marca em negrito duplicava.
+function nomeProdutoSemMarcaDuplicada(p) {
+  const marca = (p?.marca || "").trim().toLowerCase();
+  const partes = (p?.nome || "").split("|").map((s) => s.trim());
+  if (marca && partes.length > 1 && partes[partes.length - 1].toLowerCase() === marca) partes.pop();
+  return partes.join(" | ");
+}
 // Fonte da imagem pra exibir: se já tem o base64 em mãos (produto recém-editado nesta sessão),
 // usa direto, sem round-trip; senão busca na rota dedicada (leve, cacheável pelo navegador).
 // Ver server/routes/produtos.js e server/routes/catalogos.js.
@@ -883,7 +891,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                     <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
-                      <span className="flex-1 min-w-[140px]">{p.emoji} {p.marca ? `${p.marca} ` : ""}{p.nome} <span className="text-stone-400">({p.gramatura})</span></span>
+                      <span className="flex-1 min-w-[140px]">{p.emoji} {p.marca && <b>{p.marca}</b>}{p.marca ? " | " : ""}{nomeProdutoSemMarcaDuplicada(p)} <span className="text-stone-400">({p.gramatura})</span></span>
                       <div className="flex flex-col items-center">
                         <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">De</span>
                         <input type="number" step="0.01" value={selecionados[p.id]?.de ?? 0}
