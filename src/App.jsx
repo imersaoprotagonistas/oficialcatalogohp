@@ -2353,6 +2353,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
       <div className="border-t border-white/10 px-6 py-6 text-center">
         <p className="text-sm font-bold">HP Distribuidora <span className="text-stone-500 font-normal">· Suplementos pra você vender mais.</span></p>
         <p className="text-stone-500 text-xs mt-1">Preços e condições conforme este catálogo. Em caso de dúvida, fale com {consultor.nome}.</p>
+        <p className="text-stone-500 text-xs mt-1">Desenvolvido por <a href="https://acceris.com.br" target="_blank" rel="noopener noreferrer" className="hover:underline">Nil Farias</a></p>
       </div>
 
       {/* Modal de detalhes / adicionar */}
