@@ -337,8 +337,8 @@ export default function App() {
     await Promise.all([carregarDadosPublicos(), carregarEnvios("gerente")]);
     setView("gerente");
   }
-  async function loginConsultor(consultorId, senha) {
-    const { token, user } = await api.auth.loginConsultor(consultorId, senha);
+  async function loginConsultor(email, senha) {
+    const { token, user } = await api.auth.loginConsultor(email, senha);
     api.setToken(token);
     setCurrentUser({ role: "consultor", ...user });
     await Promise.all([carregarDadosPublicos(), carregarEnvios("consultor")]);
@@ -391,7 +391,7 @@ export default function App() {
   return (
     <div className="min-h-[600px] bg-stone-50 font-sans text-stone-900">
       {view === "login" && (
-        <LoginScreen consultores={consultores} onGerenteLogin={loginGerente} onConsultorLogin={loginConsultor} />
+        <LoginScreen onGerenteLogin={loginGerente} onConsultorLogin={loginConsultor} />
       )}
 
       {view === "gerente" && currentUser?.role === "gerente" && (
@@ -504,10 +504,10 @@ function Hero({ title, stats }) {
 // ---------------------------------------------------------------------------
 // Login
 // ---------------------------------------------------------------------------
-function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
+function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
   const [tab, setTab] = useState("gerente");
   const [senha, setSenha] = useState("");
-  const [consultorId, setConsultorId] = useState(consultores[0]?.id || "");
+  const [email, setEmail] = useState("");
   const [erro, setErro] = useState("");
   const [enviando, setEnviando] = useState(false);
 
@@ -521,7 +521,7 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
   async function submitConsultor(e) {
     e.preventDefault();
     setErro(""); setEnviando(true);
-    try { await onConsultorLogin(consultorId, senha); }
+    try { await onConsultorLogin(email, senha); }
     catch { setErro("Consultor ou senha incorretos."); }
     finally { setEnviando(false); }
   }
@@ -556,11 +556,10 @@ function LoginScreen({ consultores, onGerenteLogin, onConsultorLogin }) {
           </form>
         ) : (
           <form onSubmit={submitConsultor} className="space-y-3">
-            <select value={consultorId} onChange={(e) => setConsultorId(e.target.value)}
-              className="w-full bg-stone-900 border border-stone-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-              {consultores.map((c) => <option key={c.id} value={c.id}>{c.nome} — {SETORES[c.setor]}</option>)}
-            </select>
-            <input type="password" placeholder="Sua senha" value={senha} onChange={(e) => setSenha(e.target.value)}
+            <input type="email" placeholder="Seu e-mail" value={email} onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+            <input type="password" placeholder="Sua senha" autoComplete="current-password" value={senha} onChange={(e) => setSenha(e.target.value)}
               className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
             {erro && <p className="text-red-400 text-xs">{erro}</p>}
             <button type="submit" disabled={enviando} className="w-full bg-orange-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-orange-300 transition disabled:opacity-60">
@@ -2070,14 +2069,25 @@ function useDragScroll() {
   return { ref, onPointerDown, onPointerMove, onPointerUp: soltar, onPointerLeave: soltar, onPointerCancel: soltar, onClickCapture };
 }
 
-function CarrosselProdutos({ itens, qtdPorProduto, onAbrirItem, accent }) {
+// Uma única linha horizontal por seção — os produtos continuam agrupados por marca
+// (ordem do `grupos`), com uma divisória fina entre um grupo de marca e o próximo, em vez
+// de cada marca virar sua própria linha (o que deixava marcas com poucos itens "isoladas").
+function CarrosselProdutos({ itens, grupos, qtdPorProduto, onAbrirItem, accent }) {
   const drag = useDragScroll();
+  const gruposFinal = grupos || [{ marca: null, itens }];
   return (
     <div ref={drag.ref} onPointerDown={drag.onPointerDown} onPointerMove={drag.onPointerMove}
       onPointerUp={drag.onPointerUp} onPointerLeave={drag.onPointerLeave} onPointerCancel={drag.onPointerCancel}
       onClickCapture={drag.onClickCapture}
       className="flex gap-4 overflow-x-auto pb-2 cursor-grab select-none" style={{ touchAction: "pan-y" }}>
-      {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => onAbrirItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+      {gruposFinal.map((g, i) => (
+        <div key={g.marca || i} className={`shrink-0 ${i > 0 ? "pl-4 border-l border-white/10" : ""}`}>
+          {g.marca && <span className="block mb-2.5 text-[11px] font-bold uppercase tracking-wide text-stone-400">{g.marca}</span>}
+          <div className="flex gap-4">
+            {g.itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => onAbrirItem(it)} largura="w-52 shrink-0" accent={accent} />)}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2177,6 +2187,10 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
     .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
     .filter((s) => s.itens.length > 0)
     .map((s) => ({ ...s, grupos: agruparPorMarca(s.itens) }));
+  // "Todos os produtos" só mostra quem não apareceu em nenhuma seção curada acima —
+  // sem isso, o mesmo produto ficava repetido pro cliente (uma vez na seção, outra em "Todos").
+  const produtosEmSecoes = new Set(secoesCuradas.flatMap((s) => s.itens.map((it) => it.produtoId)));
+  const itensSemSecao = itensFiltrados.filter((it) => !produtosEmSecoes.has(it.produtoId));
 
   // Carrinho: { [produtoId]: { [sabor || SEM_SABOR]: quantidade } } — permite pedir
   // vários sabores do mesmo produto, cada combinação produto+sabor vira uma linha.
@@ -2311,43 +2325,23 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
               <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
               <p className="text-white/60 text-xs mt-1">{s.desc}</p>
             </div>
-            <div className="space-y-5">
-              {s.grupos.map(({ marca, itens }) => (
-                <div key={marca}>
-                  <div className="flex items-center gap-2.5 mb-2.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">{marca}</span>
-                    <span className="flex-1 h-px bg-white/10" />
-                  </div>
-                  <CarrosselProdutos itens={itens} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
-                </div>
-              ))}
-            </div>
+            <CarrosselProdutos grupos={s.grupos} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
           </div>
         ))}
 
-        {/* Todos os produtos */}
-        <div>
-          <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
-          {itensFiltrados.length === 0 ? (
-            <SemResultados busca={busca} categoriaFiltro={categoriaFiltro} itensValidos={itensValidos}
-              consultor={consultor} catalogo={catalogo} qtdPorProduto={qtdPorProduto} onAbrir={setModalItem}
-              accent={accent} onBuscaSemResultado={onBuscaSemResultado} />
-          ) : (
-            <div className="space-y-8">
-              {agruparPorMarca(itensFiltrados).map(({ marca, itens }) => (
-                <div key={marca}>
-                  <div className="flex items-center gap-2.5 mb-3">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">{marca}</span>
-                    <span className="flex-1 h-px bg-white/10" />
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {itens.map((it) => <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} accent={accent} />)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Todos os produtos — só os que não aparecem em nenhuma seção curada acima */}
+        {(itensFiltrados.length === 0 || itensSemSecao.length > 0) && (
+          <div>
+            <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
+            {itensFiltrados.length === 0 ? (
+              <SemResultados busca={busca} categoriaFiltro={categoriaFiltro} itensValidos={itensValidos}
+                consultor={consultor} catalogo={catalogo} qtdPorProduto={qtdPorProduto} onAbrir={setModalItem}
+                accent={accent} onBuscaSemResultado={onBuscaSemResultado} />
+            ) : (
+              <CarrosselProdutos grupos={agruparPorMarca(itensSemSecao)} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
+            )}
+          </div>
+        )}
       </div>
 
       <div className="border-t border-white/10 px-6 py-6 text-center">

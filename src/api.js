@@ -29,8 +29,8 @@ export const api = {
 
   auth: {
     loginGerente: (senha) => request("/auth/login", { method: "POST", body: { role: "gerente", senha } }),
-    loginConsultor: (consultorId, senha) =>
-      request("/auth/login", { method: "POST", body: { role: "consultor", consultorId, senha } }),
+    loginConsultor: (email, senha) =>
+      request("/auth/login", { method: "POST", body: { role: "consultor", email, senha } }),
   },
 
   produtos: {

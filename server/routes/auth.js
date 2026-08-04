@@ -10,7 +10,7 @@ const router = Router();
 const limiteLogin = rateLimit({ janelaMs: 10 * 60 * 1000, max: 8 });
 
 router.post("/login", limiteLogin, ah(async (req, res) => {
-  const { role, consultorId, senha } = req.body || {};
+  const { role, email, senha } = req.body || {};
 
   if (role === "gerente") {
     const ok = await verificarSenha(senha, process.env.GERENTE_SENHA_HASH);
@@ -19,7 +19,7 @@ router.post("/login", limiteLogin, ah(async (req, res) => {
   }
 
   if (role === "consultor") {
-    const { rows } = await pool.query("select * from consultores where id = $1", [consultorId]);
+    const { rows } = await pool.query("select * from consultores where lower(email) = lower($1)", [email || ""]);
     const consultor = rows[0];
     const ok = consultor && (await verificarSenha(senha, consultor.senha_hash));
     if (!ok) return res.status(401).json({ erro: "Consultor ou senha incorretos." });
