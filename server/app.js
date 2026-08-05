@@ -5,6 +5,7 @@ const cors = require("cors");
 const authRoutes = require("./routes/auth.js");
 const produtosRoutes = require("./routes/produtos.js");
 const consultoresRoutes = require("./routes/consultores.js");
+const compradoresRoutes = require("./routes/compradores.js");
 const catalogosRoutes = require("./routes/catalogos.js");
 const enviosRoutes = require("./routes/envios.js");
 const secoesRoutes = require("./routes/secoes.js");
@@ -28,6 +29,7 @@ app.use(express.json({ limit: "15mb" })); // capas de catálogo vão em base64 n
 app.use("/api/auth", authRoutes);
 app.use("/api/produtos", produtosRoutes);
 app.use("/api/consultores", consultoresRoutes);
+app.use("/api/compradores", compradoresRoutes);
 app.use("/api/catalogos", catalogosRoutes);
 app.use("/api/envios", enviosRoutes);
 app.use("/api/secoes", secoesRoutes);

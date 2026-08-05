@@ -88,4 +88,9 @@ router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   res.json(toRow(rows[0]));
 }));
 
+router.delete("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
+  await pool.query("delete from catalogos where id=$1", [req.params.id]);
+  res.status(204).end();
+}));
+
 module.exports = router;

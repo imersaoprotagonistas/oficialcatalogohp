@@ -26,11 +26,12 @@ function toRow(e) {
   };
 }
 
-// Rastreamento: gerente vê todos os envios, consultor só os próprios.
-router.get("/", requireAuth(["gerente", "consultor"]), ah(async (req, res) => {
-  const { rows } = req.user.role === "gerente"
-    ? await pool.query("select * from envios order by criado_em desc")
-    : await pool.query("select * from envios where consultor_id = $1 order by criado_em desc", [req.user.id]);
+// Rastreamento: gerente e compras veem todos os envios (compras usa isso pra saber quanto
+// cada produto já foi pedido — informação de compra, não de cliente); consultor só os próprios.
+router.get("/", requireAuth(["gerente", "consultor", "compras"]), ah(async (req, res) => {
+  const { rows } = req.user.role === "consultor"
+    ? await pool.query("select * from envios where consultor_id = $1 order by criado_em desc", [req.user.id])
+    : await pool.query("select * from envios order by criado_em desc");
   res.json(rows.map(toRow));
 }));
 

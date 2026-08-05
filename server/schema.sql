@@ -20,6 +20,38 @@ create table if not exists produtos (
   precos      jsonb not null default '{}'  -- { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista } }
 );
 
+-- Marca e categoria são cadastros de verdade, não só "o que já apareceu em algum produto" —
+-- dá pra criar uma marca nova antes de qualquer produto usar ela, e a grafia aqui é a oficial
+-- (produtos.marca/categoria são sempre reconciliados pra bater com o nome cadastrado aqui,
+-- ver canonizarValor em server/routes/produtos.js — é o que impede duplicata por maiúscula/
+-- minúscula, tipo "Synthesize" e "SYNTHESIZE" virarem duas marcas diferentes).
+create table if not exists marcas (
+  nome        text primary key,
+  criado_em   timestamptz not null default now()
+);
+create table if not exists categorias (
+  nome        text primary key,
+  criado_em   timestamptz not null default now()
+);
+
+-- Rastro de quem criou/editou/excluiu cada produto — pro gerente de compras acompanhar a
+-- equipe (aba "Histórico" dentro do login de Compras, só quem tem eh_gerente vê). De propósito
+-- sem referência (foreign key) pra produtos: precisa sobreviver mesmo depois do produto
+-- excluído — é justamente o registro de que ele foi excluído, e por quem.
+create table if not exists produtos_historico (
+  id            text primary key,
+  produto_id    text not null,
+  produto_nome  text not null, -- snapshot do nome no momento da ação (produto pode mudar de nome depois)
+  acao          text not null check (acao in ('criado', 'editado', 'excluido')),
+  autor_tipo    text not null check (autor_tipo in ('compras', 'gerente')),
+  autor_id      text, -- id do comprador; null pro gerente comercial (login único, sem conta individual)
+  autor_nome    text not null,
+  detalhe       text, -- resumo do que mudou numa edição (ex: custo, nome, ativo) — null pra criar/excluir
+  criado_em     timestamptz not null default now()
+);
+create index if not exists produtos_historico_produto_id_idx on produtos_historico(produto_id);
+create index if not exists produtos_historico_criado_em_idx on produtos_historico(criado_em desc);
+
 create table if not exists consultores (
   id          text primary key,
   nome        text not null,
@@ -27,6 +59,19 @@ create table if not exists consultores (
   whatsapp    text,
   setor       text not null check (setor in ('farm', 'primeira')),
   senha_hash  text not null,
+  criado_em   timestamptz not null default now()
+);
+
+-- Setor de compras da própria HP (quem cadastra produto, custo etc.) — mesmo modelo de
+-- login individual do consultor, mas sem whatsapp/setor (não atende cliente final).
+-- eh_gerente: só quem tem essa flag vê a aba "Equipe" e pode cadastrar/editar outros
+-- compradores (ver server/routes/compradores.js) — o gerente comercial não tem acesso a isso.
+create table if not exists compradores (
+  id          text primary key,
+  nome        text not null,
+  email       text not null unique,
+  senha_hash  text not null,
+  eh_gerente  boolean not null default false,
   criado_em   timestamptz not null default now()
 );
 
@@ -71,6 +116,7 @@ create table if not exists secoes_curadas (
   descricao  text,
   ativo      boolean not null default true,
   ordem      integer not null default 0,
+  cor        text not null default '#78716c', -- hex, dá o tom do banner da seção no catálogo público
   unique (setor, chave)
 );
 

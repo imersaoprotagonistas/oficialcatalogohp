@@ -31,6 +31,8 @@ export const api = {
     loginGerente: (senha) => request("/auth/login", { method: "POST", body: { role: "gerente", senha } }),
     loginConsultor: (email, senha) =>
       request("/auth/login", { method: "POST", body: { role: "consultor", email, senha } }),
+    loginCompras: (email, senha) =>
+      request("/auth/login", { method: "POST", body: { role: "compras", email, senha } }),
   },
 
   produtos: {
@@ -39,6 +41,18 @@ export const api = {
     atualizar: (id, p) => request(`/produtos/${id}`, { method: "PUT", body: p }),
     remover: (id) => request(`/produtos/${id}`, { method: "DELETE" }),
     imagemUrl: (id) => `${import.meta.env.BASE_URL}api/produtos/${id}/imagem`,
+    // Só seção (badges) — permissão do gerente comercial, ver server/routes/produtos.js.
+    // O resto do produto continua exclusivo de Compras.
+    atualizarCuradoria: (id, patch) => request(`/produtos/${id}/curadoria`, { method: "PATCH", body: patch }),
+    // Marca/categoria são cadastro de verdade agora (tabelas próprias, ver schema.sql) — dá pra
+    // listar (com contagem), criar sem precisar de produto, renomear (também corrige duplicata
+    // por maiúscula/minúscula) e excluir.
+    listarCampo: (campo) => request(`/produtos/campo/${campo}`),
+    criarCampo: (campo, nome) => request(`/produtos/campo/${campo}`, { method: "POST", body: { nome } }),
+    renomearCampo: (campo, de, para) => request(`/produtos/campo/${campo}`, { method: "PATCH", body: { de, para } }),
+    excluirCampo: (campo, valor) => request(`/produtos/campo/${campo}/${encodeURIComponent(valor)}`, { method: "DELETE" }),
+    // Quem criou/editou/excluiu cada produto — só pra quem tem eh_gerente (aba "Histórico").
+    listarHistorico: () => request("/produtos/historico"),
   },
 
   consultores: {
@@ -48,10 +62,18 @@ export const api = {
     remover: (id) => request(`/consultores/${id}`, { method: "DELETE" }),
   },
 
+  compradores: {
+    listar: () => request("/compradores"),
+    criar: (c) => request("/compradores", { method: "POST", body: c }),
+    atualizar: (id, c) => request(`/compradores/${id}`, { method: "PUT", body: c }),
+    remover: (id) => request(`/compradores/${id}`, { method: "DELETE" }),
+  },
+
   catalogos: {
     listar: () => request("/catalogos"),
     criar: (c) => request("/catalogos", { method: "POST", body: c }),
     atualizar: (id, c) => request(`/catalogos/${id}`, { method: "PUT", body: c }),
+    remover: (id) => request(`/catalogos/${id}`, { method: "DELETE" }),
     capaUrl: (id) => `${import.meta.env.BASE_URL}api/catalogos/${id}/capa`,
   },
 

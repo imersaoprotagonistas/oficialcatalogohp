@@ -30,6 +30,21 @@ router.post("/login", limiteLogin, ah(async (req, res) => {
     });
   }
 
+  if (role === "compras") {
+    const { rows } = await pool.query("select * from compradores where lower(email) = lower($1)", [email || ""]);
+    const comprador = rows[0];
+    const ok = comprador && (await verificarSenha(senha, comprador.senha_hash));
+    if (!ok) return res.status(401).json({ erro: "Comprador(a) ou senha incorretos." });
+    // ehGerente e nome vão no token (não só na resposta) porque server/routes/compradores.js e
+    // server/routes/produtos.js (histórico de quem criou/editou produto) usam isso direto do
+    // token — sem depender do cliente mandar de volta.
+    const { senha_hash, eh_gerente, ...semSenha } = comprador;
+    return res.json({
+      token: gerarToken({ role: "compras", id: comprador.id, ehGerente: eh_gerente, nome: comprador.nome }),
+      user: { role: "compras", ehGerente: eh_gerente, ...semSenha },
+    });
+  }
+
   res.status(400).json({ erro: "Papel inválido." });
 }));
 

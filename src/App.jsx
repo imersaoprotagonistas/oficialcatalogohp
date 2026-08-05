@@ -3,7 +3,7 @@ import {
   Package, Users, LayoutGrid, Activity, Plus, Trash2, Pencil, Copy,
   ShoppingCart, Send, Eye, LogOut, X, Check, Minus, MessageCircle,
   UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw,
-  ChevronUp, ChevronDown
+  ChevronUp, ChevronDown, Link2, Pause, Play
 } from "lucide-react";
 import { api } from "./api.js";
 
@@ -185,6 +185,9 @@ export default function App() {
 
   const [produtos, setProdutosState] = useState([]);
   const [consultores, setConsultoresState] = useState([]);
+  // Setor de compras da HP — isolado do gerente comercial: só quem loga como compras_gerente
+  // enxerga/gerencia essa lista (ver server/routes/compradores.js).
+  const [compradores, setCompradoresState] = useState([]);
   const [catalogos, setCatalogosState] = useState([]);
   const [secoes, setSecoes] = useState([]);
   const [envios, setEnvios] = useState([]);
@@ -280,6 +283,7 @@ export default function App() {
   }
   function setProdutos(v) { persistirColecao(api.produtos, produtos, v, setProdutosState); }
   function setConsultores(v) { persistirColecao(api.consultores, consultores, v, setConsultoresState); }
+  function setCompradores(v) { persistirColecao(api.compradores, compradores, v, setCompradoresState); }
   function setCatalogos(v) { persistirColecao(api.catalogos, catalogos, v, setCatalogosState); }
 
   async function atualizarSecao(id, patch) {
@@ -318,6 +322,45 @@ export default function App() {
     }
   }
 
+  // Curadoria de produto (seção/badges + nota promocional) — permissão estreita do gerente
+  // comercial, separada do resto do produto (que é exclusivo de Compras, ver ComprasPanel).
+  async function atualizarCuradoriaProduto(id, patch) {
+    setSaving(true);
+    try {
+      const atualizado = await api.produtos.atualizarCuradoria(id, patch);
+      setProdutosState((atual) => atual.map((p) => (p.id === id ? atualizado : p)));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Renomear/excluir marca ou categoria mexe em vários produtos de uma vez só no servidor —
+  // recarrega a lista inteira depois, em vez de tentar simular o resultado no client.
+  async function renomearCampoProduto(campo, de, para) {
+    setSaving(true);
+    try {
+      await api.produtos.renomearCampo(campo, de, para);
+      setProdutosState(await api.produtos.listar());
+    } catch (e) {
+      // Sem isso, um erro aqui (sessão expirada, rede etc.) falhava em silêncio — parecia que
+      // "não fazia nada" quando na real a chamada nem tinha dado certo.
+      alert(`Não foi possível renomear: ${e.message || "erro desconhecido"}. Tente novamente.`);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function excluirCampoProduto(campo, valor) {
+    setSaving(true);
+    try {
+      await api.produtos.excluirCampo(campo, valor);
+      setProdutosState(await api.produtos.listar());
+    } catch (e) {
+      alert(`Não foi possível excluir: ${e.message || "erro desconhecido"}. Tente novamente.`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function criarEnvio(catalogoId, consultorId, clienteNome, clienteTelefone) {
     const novo = await api.envios.criar({ catalogoId, consultorId, clienteNome, clienteTelefone });
     setEnvios((atual) => [novo, ...atual]);
@@ -344,6 +387,18 @@ export default function App() {
     await Promise.all([carregarDadosPublicos(), carregarEnvios("consultor")]);
     setView("consultor");
   }
+  async function loginCompras(email, senha) {
+    const { token, user } = await api.auth.loginCompras(email, senha);
+    api.setToken(token);
+    setCurrentUser({ role: "compras", ...user });
+    // Recarrega produtos já autenticado — agora a API inclui o custo, que antes de logar não vem.
+    const chamadas = [carregarDadosPublicos(), carregarEnvios("compras")];
+    // Só quem tem eh_gerente vê a equipe (ver server/routes/compradores.js) — comprador comum
+    // pegaria 403 se a gente chamasse isso pra todo mundo.
+    if (user.ehGerente) chamadas.push(api.compradores.listar().then(setCompradoresState));
+    await Promise.all(chamadas);
+    setView("compras");
+  }
 
   // Fogo-e-esquece: não bloqueia a navegação do visitante nem precisa atualizar
   // nenhum state local (o gerente vê o agregado quando abrir/sincronizar o Rastreamento).
@@ -353,7 +408,7 @@ export default function App() {
 
   function logout() {
     api.setToken(null);
-    setCurrentUser(null); setPreview(null); setEnvios([]); setView("login");
+    setCurrentUser(null); setPreview(null); setEnvios([]); setCompradoresState([]); setView("login");
   }
 
   function abrirSimulacao(catalogoId, consultorId, returnTo) {
@@ -391,7 +446,7 @@ export default function App() {
   return (
     <div className="min-h-[600px] bg-stone-50 font-sans text-stone-900">
       {view === "login" && (
-        <LoginScreen onGerenteLogin={loginGerente} onConsultorLogin={loginConsultor} />
+        <LoginScreen onGerenteLogin={loginGerente} onConsultorLogin={loginConsultor} onComprasLogin={loginCompras} />
       )}
 
       {view === "gerente" && currentUser?.role === "gerente" && (
@@ -400,10 +455,19 @@ export default function App() {
           consultores={consultores} setConsultores={setConsultores}
           catalogos={catalogos} setCatalogos={setCatalogos}
           secoes={secoes} atualizarSecao={atualizarSecao} criarSecao={criarSecao} removerSecao={removerSecao}
+          onAtualizarCuradoriaProduto={atualizarCuradoriaProduto}
+          onRenomearCampoProduto={renomearCampoProduto} onExcluirCampoProduto={excluirCampoProduto}
           envios={envios} buscas={buscas} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
         />
+      )}
+
+      {view === "compras" && currentUser?.role === "compras" && (
+        <ComprasPanel produtos={produtos} setProdutos={setProdutos}
+          onRenomearCampoProduto={renomearCampoProduto} onExcluirCampoProduto={excluirCampoProduto}
+          compradores={compradores} setCompradores={setCompradores}
+          saving={saving} onLogout={logout} comprador={currentUser} />
       )}
 
       {view === "consultor" && currentUser?.role === "consultor" && (
@@ -504,7 +568,7 @@ function Hero({ title, stats }) {
 // ---------------------------------------------------------------------------
 // Login
 // ---------------------------------------------------------------------------
-function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
+function LoginScreen({ onGerenteLogin, onConsultorLogin, onComprasLogin }) {
   const [tab, setTab] = useState("gerente");
   const [senha, setSenha] = useState("");
   const [email, setEmail] = useState("");
@@ -525,7 +589,13 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
     catch { setErro("Consultor ou senha incorretos."); }
     finally { setEnviando(false); }
   }
-
+  async function submitCompras(e) {
+    e.preventDefault();
+    setErro(""); setEnviando(true);
+    try { await onComprasLogin(email, senha); }
+    catch { setErro("Comprador(a) ou senha incorretos."); }
+    finally { setEnviando(false); }
+  }
   return (
     <div className="min-h-[600px] bg-neutral-950 flex items-center justify-center px-4 py-16">
       <div className="w-full max-w-sm">
@@ -543,9 +613,13 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
             className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "consultor" ? "bg-orange-400 text-neutral-950" : "text-stone-400"}`}>
             Consultor
           </button>
+          <button onClick={() => { setTab("compras"); setErro(""); }}
+            className={`flex-1 py-2 text-xs font-bold uppercase tracking-wide rounded-md transition ${tab === "compras" ? "bg-orange-400 text-neutral-950" : "text-stone-400"}`}>
+            Compras
+          </button>
         </div>
 
-        {tab === "gerente" ? (
+        {tab === "gerente" && (
           <form onSubmit={submitGerente} className="space-y-3">
             <input type="password" placeholder="Senha do gerente" value={senha} onChange={(e) => setSenha(e.target.value)}
               className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
@@ -554,7 +628,8 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
               {enviando ? "Entrando…" : "Entrar"}
             </button>
           </form>
-        ) : (
+        )}
+        {tab === "consultor" && (
           <form onSubmit={submitConsultor} className="space-y-3">
             <input type="email" placeholder="Seu e-mail" value={email} onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
@@ -567,6 +642,20 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
             </button>
           </form>
         )}
+        {tab === "compras" && (
+          <form onSubmit={submitCompras} className="space-y-3">
+            <input type="email" placeholder="Seu e-mail" value={email} onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+            <input type="password" placeholder="Sua senha" autoComplete="current-password" value={senha} onChange={(e) => setSenha(e.target.value)}
+              className="w-full bg-stone-900 border border-stone-700 text-white placeholder-stone-500 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+            {erro && <p className="text-red-400 text-xs">{erro}</p>}
+            <button type="submit" disabled={enviando} className="w-full bg-orange-400 text-neutral-950 rounded-lg py-2.5 text-sm font-bold hover:bg-orange-300 transition disabled:opacity-60">
+              {enviando ? "Entrando…" : "Entrar"}
+            </button>
+          </form>
+        )}
+
       </div>
     </div>
   );
@@ -575,7 +664,7 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, removerSecao, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, removerSecao, onAtualizarCuradoriaProduto, onRenomearCampoProduto, onExcluirCampoProduto, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
@@ -622,9 +711,13 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
                 </div>
               </div>
             )}
-            <CatalogosSection produtos={produtos} setProdutos={setProdutos} consultores={consultores} catalogos={catalogos}
-              setCatalogos={setCatalogos} secoes={secoes} onSimular={onSimular} />
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos} envios={envios} />
+            <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
+              setCatalogos={setCatalogos} secoes={secoes} onAtualizarCuradoriaProduto={onAtualizarCuradoriaProduto} onSimular={onSimular} />
+            {/* Compras é quem cuida de produto no dia a dia, mas o setor é novo na empresa — o
+                gerente comercial cadastra/edita como reforço enquanto isso não muda (ver
+                server/routes/produtos.js). Custo/margem continuam fora do alcance dele. */}
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} mostrarMargem={false} podeAlterarCusto={false}
+              onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
           </div>
         </>
       )}
@@ -658,6 +751,58 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
   );
 }
 
+// ---------------------------------------------------------------------------
+// Compras — setor de compras da HP: cadastra/edita produto, define custo e margem.
+// Não vê dado de cliente (sem Rastreamento). Quem tem eh_gerente=true (ver
+// server/routes/compradores.js) ganha a aba "Equipe" pra cadastrar o resto do setor —
+// o gerente comercial não participa disso de jeito nenhum.
+// ---------------------------------------------------------------------------
+function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluirCampoProduto, compradores, setCompradores, saving, onLogout, comprador }) {
+  const [tab, setTab] = useState("painel");
+  const tabs = [{ id: "painel", label: "Painel" }];
+  if (comprador.ehGerente) tabs.push({ id: "equipe", label: "Equipe" }, { id: "historico", label: "Histórico" });
+  const produtosAtivos = produtos.filter((p) => p.ativo !== false).length;
+
+  return (
+    <div>
+      <TopNav tabs={tabs} current={tab} onNav={setTab} roleLabel="Compras" onLogout={onLogout} />
+
+      {tab === "painel" && (
+        <>
+          <Hero title={`Olá, ${comprador.nome.split(" ")[0]}`} stats={[
+            { label: "Produtos ativos", value: produtosAtivos },
+            { label: "Total de produtos", value: produtos.length },
+          ]} />
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            {saving && <div className="text-[11px] text-stone-400 mb-4">Salvando…</div>}
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} podeAlterarCusto={comprador.ehGerente}
+              onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
+          </div>
+        </>
+      )}
+
+      {tab === "equipe" && comprador.ehGerente && (
+        <>
+          <Hero title="Equipe de Compras" stats={[{ label: "Cadastrados", value: compradores.length }]} />
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            {saving && <div className="text-[11px] text-stone-400 mb-4">Salvando…</div>}
+            <CompradoresSection compradores={compradores} setCompradores={setCompradores} />
+          </div>
+        </>
+      )}
+
+      {tab === "historico" && comprador.ehGerente && (
+        <>
+          <Hero title="Histórico de produtos" />
+          <div className="max-w-6xl mx-auto px-6 py-8">
+            <HistoricoProdutosSection />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // --- Busca + filtro de produtos (Marca / Produto / Categoria / Sabor) ---
 // Compartilhado entre o seletor de produtos do catálogo e a tabela de Produtos —
 // com 400+ produtos, filtrar em memória (sem ida ao servidor) já é instantâneo.
@@ -667,7 +812,18 @@ function useFiltroProdutos(produtos) {
   const [categoria, setCategoria] = useState("todas");
   const [sabor, setSabor] = useState("todas");
 
-  const valoresUnicos = (campo) => [...new Set(produtos.map((p) => p[campo]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  // "Synthesize" e "SYNTHESIZE" são a mesma marca — agrupa por chave minúscula e mantém só a
+  // primeira grafia vista, senão maiúscula/minúscula diferente vira duas opções no filtro.
+  // A limpeza definitiva do dado em si é o botão "Marcas e categorias" (renomearCampo), que
+  // reaproveita essa mesma regra no servidor pra nunca mais nascer um duplicado.
+  const valoresUnicos = (campo) => {
+    const porChave = new Map();
+    produtos.forEach((p) => {
+      const v = (p[campo] || "").trim();
+      if (v && !porChave.has(v.toLowerCase())) porChave.set(v.toLowerCase(), v);
+    });
+    return [...porChave.values()].sort((a, b) => a.localeCompare(b));
+  };
   const marcas = useMemo(() => valoresUnicos("marca"), [produtos]);
   const categorias = useMemo(() => valoresUnicos("categoria"), [produtos]);
   const sabores = useMemo(() => [...new Set(produtos.flatMap((p) => p.sabores || []))].sort((a, b) => a.localeCompare(b)), [produtos]);
@@ -675,9 +831,14 @@ function useFiltroProdutos(produtos) {
   const filtrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
     return produtos.filter((p) => {
-      if (termo && !p.nome.toLowerCase().includes(termo)) return false;
-      if (marca !== "todas" && p.marca !== marca) return false;
-      if (categoria !== "todas" && p.categoria !== categoria) return false;
+      // Busca por nome, marca, categoria e sabores juntos — antes só batia com o nome,
+      // o que obrigava a usar os selects ao lado só pra achar produto por marca/categoria.
+      if (termo) {
+        const alvo = [p.nome, p.marca, p.categoria, ...(p.sabores || [])].filter(Boolean).join(" ").toLowerCase();
+        if (!alvo.includes(termo)) return false;
+      }
+      if (marca !== "todas" && (p.marca || "").toLowerCase() !== marca.toLowerCase()) return false;
+      if (categoria !== "todas" && (p.categoria || "").toLowerCase() !== categoria.toLowerCase()) return false;
       if (sabor !== "todas" && !(p.sabores || []).includes(sabor)) return false;
       return true;
     });
@@ -718,7 +879,7 @@ function FiltroProdutosBar({ f, placeholder }) {
 }
 
 // --- Painel > Catálogos ---
-function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCatalogos, secoes, onSimular }) {
+function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, secoes, onAtualizarCuradoriaProduto, onSimular }) {
   const [criando, setCriando] = useState(false);
   const [nome, setNome] = useState("");
   const [setor, setSetor] = useState("farm");
@@ -728,6 +889,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
   const [dataInicio, setDataInicio] = useState("");
   const [dataFim, setDataFim] = useState("");
   const [selecionados, setSelecionados] = useState({});
+  const [somenteSelecionados, setSomenteSelecionados] = useState(false); // filtro "só selecionados" ao montar o catálogo
   const [expandido, setExpandido] = useState(null);
   const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
   const [copiado, setCopiado] = useState(null);
@@ -742,7 +904,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
     const base = {};
     produtos.forEach((p) => { base[p.id] = { on: false, de: p.precos?.[setor]?.de ?? 0, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
     setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO);
-    setDataInicio(hojeISO()); setDataFim("");
+    setDataInicio(hojeISO()); setDataFim(""); setSomenteSelecionados(false);
     setEditandoId(null); setCriando(true);
     capaRequestRef.current += 1; // invalida qualquer busca de capa de uma edição anterior ainda em andamento
   }
@@ -755,7 +917,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
         ? { on: true, de: item.precoDe ?? 0, vista: item.precoVista, parcelado: item.precoParcelado }
         : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0 };
     });
-    setSelecionados(base);
+    setSelecionados(base); setSomenteSelecionados(false);
     setNome(cat.nome); setSetor(cat.setor); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
     setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
     // Limpa a capa antiga já — sem isso, o formulário abre mostrando a capa que sobrou do
@@ -796,18 +958,41 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
   function publicar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
   function desativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "inativo" } : c))); }
   function reativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
+  // Duplicata nasce sempre como rascunho (mesmo se o original estiver publicado) — dá pra
+  // revisar nome, validade etc. antes de publicar de verdade. Busca a capa de verdade primeiro
+  // (não vem na listagem, ver server/routes/catalogos.js), senão a cópia nasceria sem capa.
+  async function duplicar(cat) {
+    const capa = cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "";
+    const novo = {
+      id: `cat_${Date.now()}`, nome: `${cat.nome} (cópia)`, setor: cat.setor, itens: cat.itens,
+      status: "rascunho", criadoEm: Date.now(), capa, subtitulo: cat.subtitulo,
+      corDestaque: cat.corDestaque, dataInicio: cat.dataInicio, dataFim: cat.dataFim,
+    };
+    setCatalogos([novo, ...catalogos]);
+  }
+  // Diferente de "Desativar" (reversível), isso apaga o catálogo de vez — e o rastreamento
+  // (envios/buscas) junto, por causa do ON DELETE CASCADE no schema.
+  function excluir(cat) {
+    if (!confirm(`Excluir "${cat.nome}" definitivamente? Isso também apaga o histórico de rastreamento desse catálogo (quem abriu, pediu etc.) e não pode ser desfeito.`)) return;
+    setCatalogos(catalogos.filter((c) => c.id !== cat.id));
+  }
 
   const filtro = useFiltroProdutos(produtos);
-  const porCategoria = filtro.filtrados.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
+  // "Só selecionados" filtra em cima do que já passou pelos outros filtros (busca/marca/
+  // categoria/sabor) — útil pra revisar o que já foi marcado sem rolar por centenas de produtos.
+  const produtosExibidos = somenteSelecionados
+    ? filtro.filtrados.filter((p) => selecionados[p.id]?.on)
+    : filtro.filtrados;
+  const porCategoria = produtosExibidos.reduce((acc, p) => { const k = p.categoria || "Outros"; (acc[k] = acc[k] || []).push(p); return acc; }, {});
   const totalSelecionados = Object.values(selecionados).filter((v) => v.on).length;
+
   // Seções do setor do catálogo que está sendo montado — dá pra marcar o selo do produto
-  // aqui mesmo, sem sair pra tela de Produtos (ver toggleBadgeProduto).
+  // aqui mesmo, sem sair pra outra tela. Curadoria estreita: só badges
+  // (ver server/routes/produtos.js PATCH /:id/curadoria), o resto do produto é de Compras.
   const secoesDoSetor = (secoes || []).filter((s) => s.setor === setor);
-  function toggleBadgeProduto(produtoId, chave) {
-    const alvo = produtos.find((p) => p.id === produtoId);
-    if (!alvo) return;
-    const badges = alvo.badges?.includes(chave) ? alvo.badges.filter((b) => b !== chave) : [...(alvo.badges || []), chave];
-    setProdutos(produtos.map((p) => (p.id === produtoId ? { ...p, badges } : p)));
+  function toggleBadgeProduto(p, chave) {
+    const badges = p.badges?.includes(chave) ? p.badges.filter((b) => b !== chave) : [...(p.badges || []), chave];
+    onAtualizarCuradoriaProduto(p.id, { badges });
   }
 
   return (
@@ -869,19 +1054,27 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                 className="w-14 h-9 border border-stone-300 rounded-lg cursor-pointer" />
             </div>
           </div>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <FiltroProdutosBar f={filtro} placeholder="Buscar produto por nome…" />
-            <span className="text-[11px] font-bold text-stone-400 whitespace-nowrap shrink-0 -mt-3">
-              {totalSelecionados} selecionado{totalSelecionados === 1 ? "" : "s"}
-            </span>
+            <div className="flex items-center gap-3 shrink-0 -mt-3">
+              <label className="flex items-center gap-1.5 text-[11px] font-bold text-stone-500 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={somenteSelecionados} onChange={(e) => setSomenteSelecionados(e.target.checked)} />
+                Só selecionados
+              </label>
+              <span className="text-[11px] font-bold text-stone-400 whitespace-nowrap">
+                {totalSelecionados} selecionado{totalSelecionados === 1 ? "" : "s"}
+              </span>
+            </div>
           </div>
           <p className="text-[11px] text-stone-400 -mt-1">
             Preço por produto: <b>De</b> (opcional, riscado) · <b>Por</b> (no cartão) · <b>À vista</b> ·
             bolinha = saúde da margem (verde/amarelo/vermelho) · <b>⚠</b> = preço não bate com a fórmula do produto
           </p>
           <div className="space-y-4 max-h-96 overflow-auto pr-1">
-            {filtro.filtrados.length === 0 && (
-              <p className="text-stone-400 text-sm text-center py-6">Nenhum produto encontrado com esse filtro.</p>
+            {produtosExibidos.length === 0 && (
+              <p className="text-stone-400 text-sm text-center py-6">
+                {somenteSelecionados ? "Nenhum produto selecionado ainda." : "Nenhum produto encontrado com esse filtro."}
+              </p>
             )}
             {Object.entries(porCategoria).map(([cat, itens]) => (
               <div key={cat}>
@@ -893,12 +1086,19 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                     const parceladoNum = round2(sel.parcelado || 0);
                     const vistaCalc = round2(parceladoNum * 0.97); // à vista não é editável: sempre 3% sobre o Por
                     const bate = Math.abs(parceladoNum - calc.por) < 0.01;
-                    const margemReal = round2(vistaCalc - round2(p.custo || 0));
-                    const margemRealPct = vistaCalc > 0 ? round2((margemReal / vistaCalc) * 100) : 0;
-                    const corReal = corMargem(margemRealPct);
-                    const dica = `Margem com o preço à vista (3% sobre o Por): ${formatBRL(margemReal)} (${formatPct(margemRealPct)}) — ${corReal.label}.\n`
-                      + `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
-                      + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
+                    // Margem depende do custo, dado exclusivo do setor de Compras — o backend só
+                    // manda "custo" pra quem loga como compras, então aqui vem undefined pro
+                    // gerente comercial, que não pode ver esse número (ver server/routes/produtos.js).
+                    const temCusto = p.custo !== undefined;
+                    const margemReal = temCusto ? round2(vistaCalc - round2(p.custo || 0)) : null;
+                    const margemRealPct = temCusto && vistaCalc > 0 ? round2((margemReal / vistaCalc) * 100) : 0;
+                    const corReal = temCusto ? corMargem(margemRealPct) : { dot: "bg-stone-300", texto: "text-stone-400" };
+                    const dica = temCusto
+                      ? `Margem com o preço à vista (3% sobre o Por): ${formatBRL(margemReal)} (${formatPct(margemRealPct)}) — ${corMargem(margemRealPct).label}.\n`
+                        + `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
+                        + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`
+                      : `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
+                        + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
                     return (
                     <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
@@ -923,14 +1123,18 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                           {formatBRL(vistaCalc)}
                         </div>
                       </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem %</span>
-                        <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatPct(margemRealPct)}</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem R$</span>
-                        <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatBRL(margemReal)}</span>
-                      </div>
+                      {temCusto && (
+                        <>
+                          <div className="flex flex-col items-center">
+                            <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem %</span>
+                            <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatPct(margemRealPct)}</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                            <span className="text-[9px] text-stone-400 uppercase font-bold leading-none mb-0.5">Margem R$</span>
+                            <span className={`w-16 text-center text-xs font-mono font-semibold ${corReal.texto}`}>{formatBRL(margemReal)}</span>
+                          </div>
+                        </>
+                      )}
                       <span className={`inline-flex items-center gap-1 shrink-0 ${bate ? "" : "opacity-70"}`} title={dica}>
                         <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
                         {!bate && <span className="text-amber-600 text-xs">⚠</span>}
@@ -939,7 +1143,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                         <div className="basis-full flex flex-wrap items-center gap-1.5 pl-7">
                           <span className="text-[10px] text-stone-400 uppercase font-bold">Seção:</span>
                           {secoesDoSetor.map((s) => (
-                            <button key={s.chave} type="button" onClick={(e) => { e.preventDefault(); toggleBadgeProduto(p.id, s.chave); }}
+                            <button key={s.chave} type="button" onClick={(e) => { e.preventDefault(); toggleBadgeProduto(p, s.chave); }}
                               className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${(p.badges || []).includes(s.chave) ? "bg-stone-900 text-white border-stone-900" : "border-stone-300 text-stone-500 hover:border-stone-400"}`}>
                               {s.titulo}
                             </button>
@@ -1007,33 +1211,47 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
                 <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dot}`} />
                 <span className={`text-[10px] font-bold uppercase tracking-wide ${statusInfo.texto}`}>{statusInfo.label}</span>
               </div>
-              <div className="flex gap-1.5 mt-3 flex-wrap">
+              <div className="flex items-center gap-1.5 mt-3 flex-wrap">
                 {rascunho && (
-                  <button onClick={() => publicar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">Publicar</button>
+                  <button onClick={() => publicar(cat.id)} title="Publicar"
+                    className="p-1.5 border border-stone-300 rounded-md text-stone-600 hover:bg-stone-50">
+                    <Send size={13} />
+                  </button>
                 )}
                 {publicado && (
                   <>
-                    <button onClick={() => setExpandido(expandido === cat.id ? null : cat.id)}
-                      className="text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
-                      {expandido === cat.id ? "Ocultar" : "Links"}
+                    <button onClick={() => setExpandido(expandido === cat.id ? null : cat.id)} title={expandido === cat.id ? "Ocultar links" : "Links"}
+                      className={`p-1.5 border rounded-md ${expandido === cat.id ? "bg-stone-900 border-stone-900 text-white" : "border-stone-300 text-stone-600 hover:bg-stone-50"}`}>
+                      <Link2 size={13} />
                     </button>
                     <button onClick={() => { if (confirm(`Desativar "${cat.nome}"? Os links já enviados deixam de funcionar e ele some do painel dos consultores.`)) desativar(cat.id); }}
-                      className="text-[11px] font-bold uppercase tracking-wide border border-red-200 text-red-600 rounded-md px-2.5 py-1.5 hover:bg-red-50">
-                      Desativar
+                      title="Desativar" className="p-1.5 border border-red-200 text-red-600 rounded-md hover:bg-red-50">
+                      <Pause size={13} />
                     </button>
                   </>
                 )}
                 {inativo && !expirou && (
-                  <button onClick={() => reativar(cat.id)} className="text-[11px] font-bold uppercase tracking-wide border border-orange-200 text-orange-700 rounded-md px-2.5 py-1.5 hover:bg-orange-50">
-                    Reativar
+                  <button onClick={() => reativar(cat.id)} title="Reativar"
+                    className="p-1.5 border border-orange-200 text-orange-700 rounded-md hover:bg-orange-50">
+                    <Play size={13} />
                   </button>
                 )}
                 {inativo && expirou && (
                   <span className="text-[11px] text-stone-400 italic self-center">Edite e estenda a validade pra reativar</span>
                 )}
-                <button onClick={() => iniciarEdicao(cat)}
-                  className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide border border-stone-300 rounded-md px-2.5 py-1.5 hover:bg-stone-50">
-                  <Pencil size={11} /> Editar
+                <button onClick={() => iniciarEdicao(cat)} title="Editar"
+                  className="p-1.5 border border-stone-300 rounded-md text-stone-600 hover:bg-stone-50">
+                  <Pencil size={13} />
+                </button>
+                <button onClick={() => duplicar(cat)} title="Duplicar"
+                  className="p-1.5 border border-stone-300 rounded-md text-stone-600 hover:bg-stone-50">
+                  <Copy size={13} />
+                </button>
+                {/* Excluir fica isolado no canto direito, longe do resto — de propósito, pra não
+                    ficar colado nos outros ícones e sair clicando nele sem querer. */}
+                <button onClick={() => excluir(cat)} title="Excluir"
+                  className="ml-auto p-1.5 border border-stone-200 rounded-md text-stone-400 opacity-60 hover:opacity-100 hover:bg-red-50 hover:border-red-300 hover:text-red-600 transition">
+                  <Trash2 size={13} />
                 </button>
               </div>
 
@@ -1068,15 +1286,7 @@ function CatalogosSection({ produtos, setProdutos, consultores, catalogos, setCa
 }
 
 
-// --- Painel > Seções curadas (título/descrição/ativo/ordem por setor) ---
-// A cor de cada seção fica ligada à chave do badge; chaves novas (criadas pelo gerente)
-// caem no cinza neutro do fallback abaixo até alguém adicionar uma cor dedicada.
-const SECOES_COR = {
-  marca_exclusiva: "bg-orange-500",
-  lancamento: "bg-sky-500",
-  oferta: "bg-violet-500",
-  mais_vendido: "bg-amber-500",
-};
+// --- Painel > Seções curadas (título/descrição/ativo/ordem/cor por setor) ---
 
 function SecoesSection({ secoes, atualizarSecao, criarSecao, removerSecao }) {
   return (
@@ -1103,6 +1313,7 @@ function SecoesSection({ secoes, atualizarSecao, criarSecao, removerSecao }) {
 function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao, removerSecao }) {
   const [criando, setCriando] = useState(false);
   const [titulo, setTitulo] = useState("");
+  const [cor, setCor] = useState(CATALOGO_COR_PADRAO);
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
 
@@ -1120,8 +1331,8 @@ function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao, removerSecao }
     setErro("");
     try {
       const proximaOrdem = secoes.length ? Math.max(...secoes.map((s) => s.ordem)) + 1 : 0;
-      await criarSecao({ setor, chave: titulo, titulo: titulo.trim(), ordem: proximaOrdem, ativo: true });
-      setTitulo("");
+      await criarSecao({ setor, chave: titulo, titulo: titulo.trim(), ordem: proximaOrdem, ativo: true, cor });
+      setTitulo(""); setCor(CATALOGO_COR_PADRAO);
       setCriando(false);
     } catch (e) {
       setErro(e.message || "Não deu pra criar a seção.");
@@ -1149,16 +1360,20 @@ function SetorSecoes({ setor, secoes, atualizarSecao, criarSecao, removerSecao }
         ))}
         {criando && (
           <div className="border border-dashed border-stone-300 rounded-lg p-3 space-y-2">
-            <input value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus
-              placeholder="Título da nova seção"
-              className="w-full text-sm border border-stone-200 rounded px-2 py-1.5" />
+            <div className="flex items-center gap-2">
+              <input type="color" value={cor} onChange={(e) => setCor(e.target.value)}
+                title="Cor da seção" className="w-9 h-9 shrink-0 border border-stone-300 rounded-lg cursor-pointer" />
+              <input value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus
+                placeholder="Título da nova seção"
+                className="flex-1 text-sm border border-stone-200 rounded px-2 py-1.5" />
+            </div>
             {erro && <p className="text-[11px] text-red-600">{erro}</p>}
             <div className="flex items-center gap-2">
               <button onClick={salvarNova} disabled={!titulo.trim() || salvando}
                 className="text-[11px] font-bold uppercase tracking-wide rounded-md px-2.5 py-1 border border-stone-800 bg-stone-800 text-white disabled:opacity-40">
                 {salvando ? "Criando…" : "Criar"}
               </button>
-              <button onClick={() => { setCriando(false); setTitulo(""); setErro(""); }}
+              <button onClick={() => { setCriando(false); setTitulo(""); setCor(CATALOGO_COR_PADRAO); setErro(""); }}
                 className="text-[11px] font-bold uppercase tracking-wide text-stone-400 hover:text-stone-700 px-2.5 py-1">
                 Cancelar
               </button>
@@ -1178,6 +1393,7 @@ function SecaoCard({ secao, atualizarSecao, removerSecao, onSubir, onDescer }) {
 
   function salvarTitulo() { if (titulo.trim() && titulo !== secao.titulo) atualizarSecao(secao.id, { ...secao, titulo }); }
   function salvarDescricao() { if (descricao !== (secao.descricao || "")) atualizarSecao(secao.id, { ...secao, descricao }); }
+  function salvarCor(cor) { atualizarSecao(secao.id, { ...secao, cor }); }
   function excluir() {
     if (confirm(`Excluir a seção "${secao.titulo}"? Produtos marcados com esse selo deixam de aparecer nela. Essa ação não pode ser desfeita.`)) {
       removerSecao(secao.id);
@@ -1187,7 +1403,8 @@ function SecaoCard({ secao, atualizarSecao, removerSecao, onSubir, onDescer }) {
   return (
     <div className={`border rounded-lg p-3 ${secao.ativo ? "border-stone-200" : "border-stone-200 opacity-60"}`}>
       <div className="flex items-start gap-2">
-        <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${SECOES_COR[secao.chave] || "bg-stone-400"}`} />
+        <input type="color" value={secao.cor || CATALOGO_COR_PADRAO} onChange={(e) => salvarCor(e.target.value)}
+          title="Cor da seção" className="w-6 h-6 mt-0.5 shrink-0 border border-stone-300 rounded cursor-pointer" />
         <div className="flex-1 min-w-0 space-y-1.5">
           <input value={titulo} onChange={(e) => setTitulo(e.target.value)} onBlur={salvarTitulo}
             className="w-full font-bold text-sm border border-transparent hover:border-stone-200 focus:border-stone-300 rounded px-1.5 py-1 -mx-1.5" />
@@ -1224,20 +1441,19 @@ function SecaoCard({ secao, atualizarSecao, removerSecao, onSubir, onDescer }) {
 }
 
 // --- Painel > Produtos ---
-function ProdutosSection({ produtos, setProdutos, envios }) {
+// editavel=false (usado pelo Gerente) esconde cadastro/edição/exclusão — desde que o custo virou
+// dado de Compras, só quem loga como compras tem permissão de gravar produto no backend.
+// mostrarMargem=false (usado pelo Gerente) esconde custo/margem por completo — dado exclusivo
+// de Compras (ver server/routes/produtos.js: o backend nem manda o campo "custo" pro gerente).
+function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem = true, podeAlterarCusto = true, onRenomearCampo, onExcluirCampo }) {
   const [editing, setEditing] = useState(null);
+  const [gerenciandoCampos, setGerenciandoCampos] = useState(false);
   const imagemRequestRef = useRef(0); // descarta a busca da imagem se o usuário trocar de produto antes dela terminar
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
-    marca: "", sabores: [], custo: "", badges: [], notaPromo: "",
+    marca: "", sabores: [], custo: "", badges: [],
     precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
 
   const filtro = useFiltroProdutos(produtos);
-
-  const vezesPedido = useMemo(() => {
-    const m = {};
-    envios.forEach((e) => (e.pedidoDetalhe?.itens || []).forEach((it) => { m[it.produtoId] = (m[it.produtoId] || 0) + it.quantidade; }));
-    return m;
-  }, [envios]);
 
   function salvar(prod) {
     if (prod.id) setProdutos(produtos.map((p) => (p.id === prod.id ? prod : p)));
@@ -1272,18 +1488,35 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
           Produtos <span className="text-stone-300 font-normal normal-case">({filtro.filtrados.length} de {produtos.length})</span>
         </h2>
-        <button onClick={() => { imagemRequestRef.current += 1; setCarregandoImagem(false); setEditing(blank); }}
-          className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
-          <Plus size={14} /> Novo produto
-        </button>
+        {editavel && (
+          <div className="flex gap-2">
+            {onRenomearCampo && (
+              <button onClick={() => setGerenciandoCampos(true)}
+                className="inline-flex items-center gap-1.5 border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-50">
+                Marcas e categorias
+              </button>
+            )}
+            <button onClick={() => { imagemRequestRef.current += 1; setCarregandoImagem(false); setEditing(blank); }}
+              className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
+              <Plus size={14} /> Novo produto
+            </button>
+          </div>
+        )}
       </div>
+
+      {gerenciandoCampos && (
+        <MarcasCategoriasModal onRenomear={onRenomearCampo} onExcluir={onExcluirCampo}
+          onFechar={() => setGerenciandoCampos(false)} />
+      )}
 
       {carregandoImagem && (
         <div className="bg-white border border-stone-200 rounded-xl p-4 mb-4 text-xs text-stone-400">
           Carregando produto…
         </div>
       )}
-      {editing && !carregandoImagem && <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas} />}
+      {editavel && editing && !carregandoImagem && (
+        <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas} podeAlterarCusto={podeAlterarCusto} />
+      )}
 
       <FiltroProdutosBar f={filtro} />
 
@@ -1293,12 +1526,10 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
             <tr>
               <th className="text-left px-4 py-2.5 font-bold w-10"></th>
               <th className="text-left px-4 py-2.5 font-bold">Produto</th>
-              <th className="text-left px-4 py-2.5 font-bold">Marca</th>
               <th className="text-left px-4 py-2.5 font-bold">Categoria</th>
               <th className="text-right px-4 py-2.5 font-bold">Preço (1ª / Farm)</th>
-              <th className="text-center px-4 py-2.5 font-bold">Margem (1ª / Farm)</th>
-              <th className="text-right px-4 py-2.5 font-bold">Vezes pedido</th>
-              <th className="px-4 py-2.5"></th>
+              {mostrarMargem && <th className="text-center px-4 py-2.5 font-bold">Margem (1ª / Farm)</th>}
+              {editavel && <th className="px-4 py-2.5"></th>}
             </tr>
           </thead>
           <tbody>
@@ -1314,38 +1545,52 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
                   )}
                 </td>
                 <td className="px-4 py-2.5">
-                  <div className="font-semibold">{p.nome}</div>
-                  <div className="text-[11px] text-stone-400">{[p.gramatura, (p.sabores || []).join(", ")].filter(Boolean).join(" · ")}</div>
+                  {/* Mesmo padrão do comercial: Marca (negrito) | Nome (gramatura) — ver CatalogosSection e
+                      nomeProdutoSemMarcaDuplicada, que evita duplicar a marca se ela já veio dentro do nome. */}
+                  <div className="font-semibold">
+                    {p.marca && <b>{p.marca}</b>}{p.marca ? " | " : ""}{nomeProdutoSemMarcaDuplicada(p)}{" "}
+                    <span className="text-stone-400 font-normal">({p.gramatura})</span>
+                  </div>
+                  {(p.sabores || []).length > 0 && <div className="text-[11px] text-stone-400">{p.sabores.join(", ")}</div>}
                 </td>
-                <td className="px-4 py-2.5 text-stone-500">{p.marca || "—"}</td>
                 <td className="px-4 py-2.5 text-stone-500">{p.categoria}</td>
                 <td className="px-4 py-2.5 text-right font-mono text-xs">{formatBRL(p.precos?.primeira?.vista)} / {formatBRL(p.precos?.farm?.vista)}</td>
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center justify-center gap-2">
-                    {["primeira", "farm"].map((setor) => {
-                      const vista = round2(p.precos?.[setor]?.vista || 0);
-                      const margemPct = vista > 0 ? round2(((vista - round2(p.custo || 0)) / vista) * 100) : 0;
-                      const cor = corMargem(margemPct);
-                      return (
-                        <span key={setor} className={`w-2.5 h-2.5 rounded-full ${vista > 0 ? cor.dot : "bg-stone-200"}`}
-                          title={`${SETORES[setor]}: ${vista > 0 ? `margem ${formatPct(margemPct)} — ${cor.label}` : "sem preço"}`} />
-                      );
-                    })}
-                  </div>
-                </td>
-                <td className="px-4 py-2.5 text-right font-mono">{vezesPedido[p.id] || 0}</td>
-                <td className="px-4 py-2.5">
-                  <div className="flex justify-end gap-1">
-                    <button onClick={() => editar(p)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
-                    <button onClick={() => remover(p.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
-                  </div>
-                </td>
+                {mostrarMargem && (
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center justify-center gap-2">
+                      {["primeira", "farm"].map((setor) => {
+                        const vista = round2(p.precos?.[setor]?.vista || 0);
+                        const margemPct = vista > 0 ? round2(((vista - round2(p.custo || 0)) / vista) * 100) : 0;
+                        const cor = corMargem(margemPct);
+                        return (
+                          <span key={setor} className={`w-2.5 h-2.5 rounded-full ${vista > 0 ? cor.dot : "bg-stone-200"}`}
+                            title={`${SETORES[setor]}: ${vista > 0 ? `margem ${formatPct(margemPct)} — ${cor.label}` : "sem preço"}`} />
+                        );
+                      })}
+                    </div>
+                  </td>
+                )}
+                {editavel && (
+                  <td className="px-4 py-2.5">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => editar(p)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
+                      <button onClick={() => remover(p.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
-            {produtos.length === 0 && <tr><td colSpan={8} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto cadastrado.</td></tr>}
-            {produtos.length > 0 && filtro.filtrados.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto encontrado com esse filtro.</td></tr>
-            )}
+            {(() => {
+              const colSpan = 4 + (mostrarMargem ? 1 : 0) + (editavel ? 1 : 0);
+              return (
+                <>
+                  {produtos.length === 0 && <tr><td colSpan={colSpan} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto cadastrado.</td></tr>}
+                  {produtos.length > 0 && filtro.filtrados.length === 0 && (
+                    <tr><td colSpan={colSpan} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum produto encontrado com esse filtro.</td></tr>
+                  )}
+                </>
+              );
+            })()}
           </tbody>
         </table>
       </div>
@@ -1353,7 +1598,145 @@ function ProdutosSection({ produtos, setProdutos, envios }) {
   );
 }
 
-function ProdutoForm({ inicial, onSalvar, onCancelar, marcas }) {
+// Busca marca/categoria do servidor (não deriva de "produtos" em memória) — é o que permite
+// mostrar (e criar) uma marca com zero produto ainda, coisa que não dava pra saber só olhando
+// os produtos carregados. De propósito SEM agrupar por maiúscula/minúscula: é exatamente aqui
+// que dá pra ver "Synthesize" e "SYNTHESIZE" como duas linhas separadas e resolver renomeando
+// uma pra virar a outra (o servidor então já funde pro mesmo valor, ver renomearCampo).
+// Abas separadas (Marcas / Categorias, uma de cada vez) + busca + lista com altura fixa: com
+// 100+ marcas cadastradas, empilhar as duas listas inteiras na tela (como era antes) vira uma
+// rolagem enorme só pra achar uma. A busca só aparece quando a lista é grande o suficiente pra
+// precisar dela (>8 itens) — não faz sentido pra 3 categorias.
+function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
+  const [aba, setAba] = useState("marca");
+  const [dados, setDados] = useState({ marca: null, categoria: null }); // null = ainda carregando
+  const [erro, setErro] = useState("");
+  const [busca, setBusca] = useState("");
+  const [novoNome, setNovoNome] = useState("");
+  const [criando, setCriando] = useState(false);
+
+  async function carregar() {
+    setErro("");
+    try {
+      const [m, c] = await Promise.all([api.produtos.listarCampo("marca"), api.produtos.listarCampo("categoria")]);
+      setDados({ marca: m, categoria: c });
+    } catch (e) {
+      // Sem isso, um erro aqui (ex: tabela ainda não criada) travava a tela em "Carregando…"
+      // pra sempre, sem nenhum aviso — parecia que o botão nem fazia nada.
+      setErro(e.message || "Não foi possível carregar marcas e categorias.");
+    }
+  }
+  useEffect(() => { carregar(); }, []);
+  useEffect(() => { setBusca(""); setNovoNome(""); }, [aba]);
+
+  const lista = dados[aba];
+  const filtrada = (lista || []).filter((row) => row.nome.toLowerCase().includes(busca.trim().toLowerCase()));
+
+  async function criar(e) {
+    e.preventDefault();
+    const nome = novoNome.trim();
+    if (!nome) return;
+    setCriando(true);
+    try {
+      await api.produtos.criarCampo(aba, nome);
+      setNovoNome("");
+      await carregar();
+    } catch (err) {
+      alert(`Não foi possível criar: ${err.message || "erro desconhecido"}.`);
+    } finally {
+      setCriando(false);
+    }
+  }
+  async function renomear(atual) {
+    const novo = prompt(`Novo nome pra "${atual}" (aplica em todos os produtos que usam esse valor):`, atual);
+    if (!novo || !novo.trim() || novo.trim() === atual) return;
+    await onRenomear(aba, atual, novo.trim());
+    await carregar();
+  }
+  async function excluir(atual, qtd) {
+    const aviso = qtd > 0
+      ? `Excluir "${atual}"? Isso também limpa o campo em ${qtd} produto${qtd === 1 ? "" : "s"} que usa${qtd === 1 ? "" : "m"} esse valor.`
+      : `Excluir "${atual}"? Nenhum produto usa esse valor no momento.`;
+    if (!confirm(aviso)) return;
+    await onExcluir(aba, atual);
+    await carregar();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onFechar}>
+      <div className="bg-white rounded-xl max-w-md w-full max-h-[85vh] flex flex-col p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-bold text-sm">Marcas e categorias</h3>
+          <button onClick={onFechar} className="text-stone-400 hover:text-stone-700"><X size={18} /></button>
+        </div>
+
+        <div className="flex rounded-lg bg-stone-100 p-1 mb-3 shrink-0">
+          <button onClick={() => setAba("marca")}
+            className={`flex-1 py-1.5 text-[11px] font-bold uppercase tracking-wide rounded-md transition ${aba === "marca" ? "bg-white shadow-sm text-stone-900" : "text-stone-500"}`}>
+            Marcas{dados.marca ? ` (${dados.marca.length})` : ""}
+          </button>
+          <button onClick={() => setAba("categoria")}
+            className={`flex-1 py-1.5 text-[11px] font-bold uppercase tracking-wide rounded-md transition ${aba === "categoria" ? "bg-white shadow-sm text-stone-900" : "text-stone-500"}`}>
+            Categorias{dados.categoria ? ` (${dados.categoria.length})` : ""}
+          </button>
+        </div>
+
+        {erro && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3">
+            {erro} <button onClick={carregar} className="underline font-bold">Tentar de novo</button>
+          </div>
+        )}
+
+        {!erro && lista === null && <p className="text-stone-400 text-sm text-center py-10">Carregando…</p>}
+
+        {!erro && lista !== null && (
+          <>
+            <form onSubmit={criar} className="flex gap-2 mb-2.5 shrink-0">
+              <input value={novoNome} onChange={(e) => setNovoNome(e.target.value)} placeholder={`Nova ${aba}...`}
+                className="flex-1 border border-stone-300 rounded-lg px-2.5 py-1.5 text-sm" />
+              <button type="submit" disabled={criando}
+                className="inline-flex items-center gap-1 bg-stone-900 text-white text-[11px] font-bold uppercase tracking-wide px-3 py-1.5 rounded-md hover:bg-stone-800 disabled:opacity-60">
+                <Plus size={12} /> Criar
+              </button>
+            </form>
+
+            {lista.length > 8 && (
+              <div className="relative mb-2 shrink-0">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
+                <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder={`Buscar ${aba}...`}
+                  className="w-full border border-stone-300 rounded-lg pl-8 pr-3 py-1.5 text-sm" />
+              </div>
+            )}
+
+            <div className="space-y-1 overflow-y-auto flex-1 min-h-0">
+              {filtrada.map((row) => (
+                <div key={row.nome} className="flex items-center justify-between border border-stone-200 rounded-lg px-3 py-1.5 text-sm">
+                  <span className="truncate">{row.nome} <span className="text-stone-400 text-xs">({row.qtd})</span></span>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => renomear(row.nome)} className="p-1 text-stone-400 hover:text-stone-700" title="Renomear"><Pencil size={13} /></button>
+                    <button onClick={() => excluir(row.nome, row.qtd)} className="p-1 text-stone-400 hover:text-red-600" title="Excluir"><Trash2 size={13} /></button>
+                  </div>
+                </div>
+              ))}
+              {filtrada.length === 0 && (
+                <p className="text-stone-400 text-xs text-center py-4">
+                  {busca ? "Nenhuma encontrada com esse filtro." : "Nenhuma cadastrada."}
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// podeAlterarCusto=false (comprador comum, sem eh_gerente) desabilita o campo de custo — só o
+// gerente de compras mexe nesse número (ver server/routes/produtos.js pro mesmo bloqueio na API).
+// Seção curada não aparece aqui de propósito — é curadoria de catálogo (ver CatalogosSection),
+// não cadastro de compra. O form só preserva f.badges como veio, pra não apagar o que o
+// gerente já tiver marcado ao salvar o resto do produto.
+function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto = true }) {
   const [f, setF] = useState(inicial);
   const setPreco = (setor, tipo, val) => setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], [tipo]: val } } });
   async function onImagemFile(e) {
@@ -1417,7 +1800,7 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas }) {
           </div>
         </div>
       </div>
-      <div className="grid sm:grid-cols-3 gap-3">
+      <div className="grid sm:grid-cols-2 gap-3">
         <div>
           <label className="text-[11px] text-stone-400 block mb-1">Marca</label>
           <input required list="marcas-existentes" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
@@ -1426,13 +1809,13 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas }) {
         </div>
         <div>
           <label className="text-[11px] text-stone-400 block mb-1">Custo (R$)</label>
-          <input type="number" step="0.01" value={f.custo ?? ""} onChange={(e) => setF({ ...f, custo: e.target.value })}
-            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono" title="Custo do produto, usado pra calcular a margem" />
-        </div>
-        <div>
-          <label className="text-[11px] text-stone-400 block mb-1">Nota promocional (opcional)</label>
-          <input value={f.notaPromo} onChange={(e) => setF({ ...f, notaPromo: e.target.value })}
-            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <input type="number" step="0.01" value={f.custo ?? ""} disabled={!podeAlterarCusto}
+            onChange={(e) => setF({ ...f, custo: e.target.value })}
+            className={`w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono ${!podeAlterarCusto ? "bg-stone-100 text-stone-400 cursor-not-allowed" : ""}`}
+            title={podeAlterarCusto ? "Custo do produto, usado pra calcular a margem" : "Somente o gerente de compras pode alterar o custo do produto."} />
+          {!podeAlterarCusto && (
+            <p className="text-[11px] text-amber-600 mt-1">Somente o gerente de compras pode alterar o custo.</p>
+          )}
         </div>
       </div>
       <div>
@@ -1609,6 +1992,162 @@ function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) 
         </table>
       </div>
     </div>
+  );
+}
+
+// --- Compradores (contas de quem loga como "compras" — cadastra/edita produto e custo).
+// Aba "Equipe" dentro do ComprasPanel, visível só pra quem tem ehGerente=true — o gerente
+// comercial não gerencia (nem enxerga) essas contas. ---
+function CompradoresSection({ compradores, setCompradores }) {
+  const [editing, setEditing] = useState(null);
+  const blank = { nome: "", email: "", senha: "1234", ehGerente: false };
+
+  function salvar(c) {
+    // Edição sem preencher senha = mantém a senha atual (o backend nunca devolve a senha salva).
+    const registro = c.senha ? c : { ...c, senha: undefined };
+    if (c.id) setCompradores(compradores.map((x) => (x.id === c.id ? registro : x)));
+    else setCompradores([...compradores, { ...registro, id: `cp_${Date.now()}` }]);
+    setEditing(null);
+  }
+  function remover(id) { if (confirm("Remover este comprador(a)?")) setCompradores(compradores.filter((x) => x.id !== id)); }
+
+  return (
+    <div>
+      <div className="flex justify-end mb-3">
+        <button onClick={() => setEditing(blank)}
+          className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
+          <Plus size={14} /> Novo comprador(a)
+        </button>
+      </div>
+
+      {editing && (
+        <form onSubmit={(e) => { e.preventDefault(); salvar(editing); }}
+          className="bg-white border border-stone-200 rounded-xl p-4 mb-4 grid sm:grid-cols-5 gap-3 items-end">
+          <input required placeholder="Nome" value={editing.nome} onChange={(e) => setEditing({ ...editing, nome: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <input required type="email" placeholder="E-mail" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <input placeholder={editing.id ? "Nova senha (deixe em branco p/ manter)" : "Senha"} value={editing.senha || ""}
+            onChange={(e) => setEditing({ ...editing, senha: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          <label className="flex items-center gap-2 text-xs text-stone-600 px-1" title="Também pode cadastrar/editar outros compradores nessa mesma tela">
+            <input type="checkbox" checked={!!editing.ehGerente} onChange={(e) => setEditing({ ...editing, ehGerente: e.target.checked })} />
+            Gerente de compras
+          </label>
+          <div className="sm:col-span-5 flex gap-2">
+            <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar</button>
+            <button type="button" onClick={() => setEditing(null)} className="text-stone-500 text-sm px-4 py-2">Cancelar</button>
+          </div>
+        </form>
+      )}
+
+      <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-4 py-2.5 font-bold">Comprador(a)</th>
+              <th className="text-left px-4 py-2.5 font-bold">E-mail</th>
+              <th className="text-left px-4 py-2.5 font-bold">Papel</th>
+              <th className="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {compradores.map((c) => (
+              <tr key={c.id} className="border-t border-stone-100">
+                <td className="px-4 py-2.5 font-semibold">{c.nome}</td>
+                <td className="px-4 py-2.5 text-stone-500">{c.email}</td>
+                <td className="px-4 py-2.5">
+                  {c.ehGerente
+                    ? <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">Gerente de compras</span>
+                    : <span className="text-stone-400 text-xs">Comprador(a)</span>}
+                </td>
+                <td className="px-4 py-2.5">
+                  <div className="flex justify-end gap-1">
+                    <button onClick={() => setEditing(c)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
+                    <button onClick={() => remover(c.id)} className="p-1.5 text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {compradores.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum comprador(a) cadastrado.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Rastro de quem criou/editou/excluiu cada produto — self-contido (busca do servidor sozinho),
+// mesmo padrão do MarcasCategoriasModal. Só o gerente de compras vê essa aba.
+const HISTORICO_ACAO_LABEL = { criado: "Cadastrou", editado: "Editou", excluido: "Excluiu" };
+const HISTORICO_ACAO_COR = {
+  criado: "bg-emerald-100 text-emerald-700",
+  editado: "bg-amber-100 text-amber-700",
+  excluido: "bg-red-100 text-red-700",
+};
+function HistoricoProdutosSection() {
+  const [historico, setHistorico] = useState(null); // null = carregando
+  const [erro, setErro] = useState("");
+
+  async function carregar() {
+    setErro("");
+    try {
+      setHistorico(await api.produtos.listarHistorico());
+    } catch (e) {
+      setErro(e.message || "Não foi possível carregar o histórico.");
+    }
+  }
+  useEffect(() => { carregar(); }, []);
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
+          Quem criou, editou ou excluiu cada produto — mais recente primeiro
+        </h2>
+        <button onClick={carregar} title="Atualizar" className="p-1.5 text-stone-400 hover:text-stone-700"><RefreshCw size={14} /></button>
+      </div>
+
+      {erro && (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3">
+          {erro} <button onClick={carregar} className="underline font-bold">Tentar de novo</button>
+        </div>
+      )}
+
+      {!erro && historico === null && <p className="text-stone-400 text-sm text-center py-10">Carregando…</p>}
+
+      {!erro && historico !== null && (
+        <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-stone-400 text-[11px] uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-4 py-2.5 font-bold">Quando</th>
+                <th className="text-left px-4 py-2.5 font-bold">Produto</th>
+                <th className="text-left px-4 py-2.5 font-bold">Ação</th>
+                <th className="text-left px-4 py-2.5 font-bold">Quem</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historico.map((h) => (
+                <tr key={h.id} className="border-t border-stone-100 align-top">
+                  <td className="px-4 py-2.5 text-stone-500 whitespace-nowrap">{new Date(h.criadoEm).toLocaleString("pt-BR")}</td>
+                  <td className="px-4 py-2.5 font-semibold">{h.produtoNome}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${HISTORICO_ACAO_COR[h.acao] || "bg-stone-100 text-stone-600"}`}>
+                      {HISTORICO_ACAO_LABEL[h.acao] || h.acao}
+                    </span>
+                    {h.detalhe && <div className="text-[11px] text-stone-400 mt-1">{h.detalhe}</div>}
+                  </td>
+                  <td className="px-4 py-2.5 text-stone-500">
+                    {h.autorNome}{h.autorTipo === "gerente" && <span className="text-stone-400"> (Gerente comercial)</span>}
+                  </td>
+                </tr>
+              ))}
+              {historico.length === 0 && (
+                <tr><td colSpan={4} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum registro ainda.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -2018,15 +2557,6 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
 // ---------------------------------------------------------------------------
 // Catálogo público (cliente) — vitrine escura, estilo loja online
 // ---------------------------------------------------------------------------
-// Gradiente de cada seção curada é fixo (ligado à chave do badge); título/descrição/
-// ativo/ordem vêm da API (editáveis pelo gerente em Painel > Seções).
-const SECOES_GRAD = {
-  marca_exclusiva: "from-amber-900 via-orange-800 to-neutral-900",
-  lancamento: "from-sky-900 via-blue-800 to-neutral-900",
-  oferta: "from-violet-900 via-purple-800 to-neutral-900",
-  mais_vendido: "from-yellow-800 via-amber-700 to-neutral-900",
-};
-
 // Arrastar-pra-rolar nos carrosséis horizontais: overflow-x-auto sozinho não deixa
 // arrastar com o cursor no mouse, e o toque no touch-action padrão fica ambíguo com o
 // scroll vertical da página. Pointer Events unificam mouse/touch/caneta num só handler;
@@ -2184,7 +2714,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const secoesCuradas = (secoes || [])
     .filter((s) => s.setor === catalogo.setor && s.ativo)
     .sort((a, b) => a.ordem - b.ordem)
-    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, grad: SECOES_GRAD[s.chave] || "from-stone-800 via-stone-700 to-neutral-900", itens: porBadge(s.chave) }))
+    .map((s) => ({ chave: s.chave, titulo: s.titulo, desc: s.descricao, cor: s.cor || CATALOGO_COR_PADRAO, itens: porBadge(s.chave) }))
     .filter((s) => s.itens.length > 0)
     .map((s) => ({ ...s, grupos: agruparPorMarca(s.itens) }));
   // "Todos os produtos" só mostra quem não apareceu em nenhuma seção curada acima —
@@ -2320,7 +2850,10 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
         {/* Seções curadas */}
         {secoesCuradas.map((s) => (
           <div key={s.chave}>
-            <div className={`bg-gradient-to-r ${s.grad} rounded-2xl px-5 py-4 mb-4`}>
+            {/* Gradiente montado em cima da cor cadastrada na seção (ver Painel > Seções) — vai
+                sumindo pro fundo escuro da página em vez de precisar de um "from/via/to" fixo. */}
+            <div className="rounded-2xl px-5 py-4 mb-4"
+              style={{ background: `linear-gradient(to right, ${hexToRgba(s.cor, 0.55)}, ${hexToRgba(s.cor, 0.22)} 65%, transparent)` }}>
               <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Catálogo {SETORES[catalogo.setor]}</span>
               <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
               <p className="text-white/60 text-xs mt-1">{s.desc}</p>
@@ -2367,8 +2900,6 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
               <h3 className="font-black text-lg mt-0.5">{modalItem.produto.nome}</h3>
               <div className="text-stone-400 text-xs mt-0.5">{modalItem.produto.gramatura}</div>
               {modalItem.produto.descricao && <p className="text-stone-300 text-sm mt-2.5">{modalItem.produto.descricao}</p>}
-
-              {modalItem.produto.notaPromo && <p className="text-amber-400 text-xs mt-2">✦ {modalItem.produto.notaPromo}</p>}
 
               <div className="mt-4">
                 {modalItem.precoDe > modalItem.precoParcelado && (
@@ -2499,7 +3030,6 @@ function ProdutoCard({ item, qtd, onAbrir, largura, accent }) {
           <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[p.categoria] || "bg-stone-400"}`} /> {p.categoria}
         </div>
 
-        {p.notaPromo && <p className="text-amber-400 text-[10px] mt-1.5">✦ {p.notaPromo}</p>}
         {(p.sabores?.length || 0) >= 2 && (
           <p className="text-stone-400 text-[10px] mt-1.5">{p.sabores.length} sabores disponíveis</p>
         )}
