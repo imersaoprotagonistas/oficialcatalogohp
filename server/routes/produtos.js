@@ -10,9 +10,9 @@ const router = Router();
 // em toda listagem deixava o catálogo público baixando ~40mb só de fotos antes de mostrar
 // qualquer produto. Agora a listagem só diz "temImagem" e a foto em si sai por uma rota própria
 // (/:id/imagem), servida como imagem de verdade — o navegador cacheia e carrega sob demanda.
-// custo é dado sensível e exclusivo do setor de Compras — só sai pra quem loga como compras.
-// De propósito o gerente comercial não entra nessa lista: não pode ver custo/margem, ver
-// server/routes/compradores.js pro mesmo isolamento nas contas do setor.
+// custo é dado sensível — só sai pra quem loga como compras ou como gerente comercial.
+// Decisão de negócio (antes o gerente comercial não tinha acesso a isso, ver histórico de
+// commits): agora ele também precisa mexer no custo, então entra na mesma lista de Compras.
 function toRow(p, incluirCusto) {
   const row = {
     id: p.id,
@@ -40,7 +40,7 @@ router.get("/", optionalAuth, ah(async (req, res) => {
        ativo, marca, sabores, custo, badges, precos
      from produtos order by nome`
   );
-  const incluirCusto = req.user?.role === "compras";
+  const incluirCusto = ["compras", "gerente"].includes(req.user?.role);
   res.json(rows.map((p) => toRow(p, incluirCusto)));
 }));
 
@@ -63,14 +63,11 @@ router.get("/:id/imagem", ah(async (req, res) => {
 
 // Cadastro/edição de produto: Compras é quem cuida disso no dia a dia, mas o setor é novo na
 // empresa e ainda está aprendendo — o gerente comercial cadastra/edita como reforço enquanto
-// isso não muda. Custo continua intocável pra ele em qualquer caso (ver calcularCusto abaixo):
-// diferente de um comprador comum (que vê o custo real e só é barrado se tentar mudá-lo), o
-// gerente nunca recebe o campo (GET / já omite pra esse papel), então aqui a gente nem compara
-// — simplesmente ignora o que ele mandar e preserva o valor que já estava salvo.
+// isso não muda. Custo: só quem tem "livre acesso" (gerente comercial e gerente de compras)
+// pode alterar; um comprador comum só é barrado se tentar mudar o valor que já via.
 function calcularCusto(req, custoAtual) {
   const b = req.body || {};
-  if (req.user.role === "gerente") return { custo: custoAtual, erro: null };
-  if (req.user.ehGerente) return { custo: Number(b.custo) || 0, erro: null }; // gerente de compras: livre
+  if (req.user.role === "gerente" || req.user.ehGerente) return { custo: Number(b.custo) || 0, erro: null };
   // comprador comum: só passa se não estiver tentando mudar o valor que já via.
   const tentativa = Number(b.custo) || 0;
   if (tentativa !== custoAtual) {
@@ -142,7 +139,7 @@ router.post("/", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
       JSON.stringify(b.sabores || []), custo, JSON.stringify(b.badges || []), JSON.stringify(b.precos || {})]
   );
   await registrarHistorico(req, rows[0].id, rows[0].nome, "criado", null);
-  res.status(201).json(toRow(rows[0], req.user.role === "compras"));
+  res.status(201).json(toRow(rows[0], true)); // já passou por calcularCusto acima — sempre pode ver o que acabou de gravar
 }));
 
 router.put("/:id", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
@@ -164,7 +161,7 @@ router.put("/:id", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
       JSON.stringify(b.sabores || []), custo, JSON.stringify(b.badges || []), JSON.stringify(b.precos || {}), req.params.id]
   );
   await registrarHistorico(req, rows[0].id, rows[0].nome, "editado", resumoEdicao(atual[0], rows[0]));
-  res.json(toRow(rows[0], req.user.role === "compras"));
+  res.json(toRow(rows[0], true)); // idem: já passou por calcularCusto, sempre pode ver o que acabou de gravar
 }));
 
 router.delete("/:id", requireAuth(["compras"]), ah(async (req, res) => {
@@ -252,9 +249,9 @@ router.delete("/campo/:campo/:valor", requireAuth(["compras", "gerente"]), ah(as
 }));
 
 // Permissão estreita pro gerente comercial: seção curada (badges) é curadoria de catálogo, não
-// dado de compra — mas o resto do produto (nome, preço, custo etc.) continua fora do alcance
-// do gerente, só isso aqui. Ver server/routes/compradores.js pro mesmo tipo de isolamento do
-// lado de Compras.
+// dado de compra — mas o resto do produto (nome, preço etc.) continua fora do alcance dele por
+// essa rota, que só grava badges. Custo vai na resposta porque o gerente já tem acesso a ele
+// via POST/PUT normal (ver calcularCusto acima) — omitir aqui só causaria inconsistência.
 router.patch("/:id/curadoria", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
   const { rows } = await pool.query(
@@ -262,7 +259,7 @@ router.patch("/:id/curadoria", requireAuth(["gerente"]), ah(async (req, res) => 
     [JSON.stringify(b.badges || []), req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Produto não encontrado." });
-  res.json(toRow(rows[0], false)); // gerente não recebe custo, mesma regra do GET /
+  res.json(toRow(rows[0], true));
 }));
 
 module.exports = router;

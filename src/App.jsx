@@ -57,6 +57,14 @@ function calcularPrecoSetor({ de, desconto, custo }) {
   const margemPct = vista > 0 ? round2((margemReais / vista) * 100) : 0;
   return { valorDesconto, por, valor3off, vista, margemReais, margemPct };
 }
+// Cadastro de produto trabalha no sentido contrário do cálculo acima: em vez de digitar o
+// desconto e ver o "Por" resultante, digita-se "De" e "Por" (os dois números que já vêm da
+// negociação) e o desconto sai sozinho — ver ProdutoForm.
+function descontoDeDePor(de, por) {
+  const deN = round2(de || 0);
+  const porN = round2(por || 0);
+  return deN > 0 ? round2(((deN - porN) / deN) * 100) : 0;
+}
 // Formatação condicional da margem: >= 28% verde, entre 27% e 28% amarelo, abaixo de 27% vermelho.
 function corMargem(margemPct) {
   if (margemPct >= 28) return { dot: "bg-orange-500", texto: "text-orange-700", fundo: "bg-orange-50", borda: "border-orange-300", label: "Margem saudável" };
@@ -714,9 +722,9 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
               setCatalogos={setCatalogos} secoes={secoes} onAtualizarCuradoriaProduto={onAtualizarCuradoriaProduto} onSimular={onSimular} />
             {/* Compras é quem cuida de produto no dia a dia, mas o setor é novo na empresa — o
-                gerente comercial cadastra/edita como reforço enquanto isso não muda (ver
-                server/routes/produtos.js). Custo/margem continuam fora do alcance dele. */}
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos} mostrarMargem={false} podeAlterarCusto={false}
+                gerente comercial cadastra/edita como reforço enquanto isso não muda. Custo/margem
+                também liberados pra ele por decisão de negócio (ver server/routes/produtos.js). */}
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos}
               onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
           </div>
         </>
@@ -1086,9 +1094,9 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
                     const parceladoNum = round2(sel.parcelado || 0);
                     const vistaCalc = round2(parceladoNum * 0.97); // à vista não é editável: sempre 3% sobre o Por
                     const bate = Math.abs(parceladoNum - calc.por) < 0.01;
-                    // Margem depende do custo, dado exclusivo do setor de Compras — o backend só
-                    // manda "custo" pra quem loga como compras, então aqui vem undefined pro
-                    // gerente comercial, que não pode ver esse número (ver server/routes/produtos.js).
+                    // Margem depende do custo — o backend manda esse campo pra quem loga como
+                    // compras ou gerente (ver server/routes/produtos.js); pro visitante/consultor
+                    // não vem, então o guard abaixo continua útil pra esses casos.
                     const temCusto = p.custo !== undefined;
                     const margemReal = temCusto ? round2(vistaCalc - round2(p.custo || 0)) : null;
                     const margemRealPct = temCusto && vistaCalc > 0 ? round2((margemReal / vistaCalc) * 100) : 0;
@@ -1738,7 +1746,32 @@ function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
 // gerente já tiver marcado ao salvar o resto do produto.
 function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto = true }) {
   const [f, setF] = useState(inicial);
-  const setPreco = (setor, tipo, val) => setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], [tipo]: val } } });
+  // De, Desconto e Por continuam os três editáveis — mudar qualquer um recalcula os outros na
+  // hora, sem precisar de botão pra sincronizar. À vista nunca é digitado: é sempre 3% sobre o
+  // Por, sai só como resultado (ver render). Editar "De" ou "Desconto" recalcula o Por (fórmula
+  // de cima pra baixo); editar o "Por" direto (ex: negociou um valor fechado) recalcula o
+  // Desconto pra bater com ele — é o que permite aumentar o desconto na mão e ver o Por cair.
+  function setPrecoDe(setor, valorStr) {
+    setF((cur) => {
+      const sp = cur.precos[setor];
+      const { por } = calcularPrecoSetor({ de: Number(valorStr) || 0, desconto: Number(sp.desconto) || 0 });
+      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, de: valorStr, parcelado: por } } };
+    });
+  }
+  function setPrecoDesconto(setor, valorStr) {
+    setF((cur) => {
+      const sp = cur.precos[setor];
+      const { por } = calcularPrecoSetor({ de: Number(sp.de) || 0, desconto: Number(valorStr) || 0 });
+      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, desconto: valorStr, parcelado: por } } };
+    });
+  }
+  function setPrecoPor(setor, valorStr) {
+    setF((cur) => {
+      const sp = cur.precos[setor];
+      const desconto = descontoDeDePor(sp.de, valorStr);
+      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, parcelado: valorStr, desconto } } };
+    });
+  }
   async function onImagemFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1753,15 +1786,22 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
     setNovoSabor("");
   }
   function removerSabor(s) { setF({ ...f, sabores: (f.sabores || []).filter((x) => x !== s) }); }
-  function usarCalculado(setor) {
-    const calc = calcularPrecoSetor({ de: f.precos[setor].de, desconto: f.precos[setor].desconto, custo: f.custo });
-    setF({ ...f, precos: { ...f.precos, [setor]: { ...f.precos[setor], parcelado: calc.por, vista: calc.vista } } });
+  // Desconto (%) e À vista não são mais digitados — saem sempre de "De"/"Por": desconto é a
+  // diferença entre os dois, à vista é sempre 3% sobre o Por. Calculado de novo aqui (não só
+  // na exibição) pra garantir que o que é salvo bate exatamente com o que apareceu na tela.
+  // De/Desconto/Por já chegam sincronizados aqui (ver setPrecoDe/setPrecoDesconto/setPrecoPor) —
+  // só falta converter pra número e recalcular o À vista, que nunca é guardado como campo vivo.
+  function montarPreco(sp) {
+    const de = Number(sp.de) || 0;
+    const desconto = Number(sp.desconto) || 0;
+    const parcelado = Number(sp.parcelado) || 0;
+    return { de, desconto, parcelado, vista: round2(parcelado * 0.97) };
   }
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSalvar({ ...f, custo: Number(f.custo) || 0, precos: {
-      primeira: { de: Number(f.precos.primeira.de) || 0, desconto: Number(f.precos.primeira.desconto) || 0, parcelado: Number(f.precos.primeira.parcelado) || 0, vista: Number(f.precos.primeira.vista) || 0 },
-      farm: { de: Number(f.precos.farm.de) || 0, desconto: Number(f.precos.farm.desconto) || 0, parcelado: Number(f.precos.farm.parcelado) || 0, vista: Number(f.precos.farm.vista) || 0 },
+      primeira: montarPreco(f.precos.primeira),
+      farm: montarPreco(f.precos.farm),
     } }); }}
       className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
       <div className="grid sm:grid-cols-4 gap-3">
@@ -1845,44 +1885,32 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
         {["primeira", "farm"].map((setor) => {
           const sp = f.precos[setor];
           const calc = calcularPrecoSetor({ de: sp.de, desconto: sp.desconto, custo: f.custo });
-          const porBate = Math.abs(round2(sp.parcelado || 0) - calc.por) < 0.01;
-          const vistaBate = Math.abs(round2(sp.vista || 0) - calc.vista) < 0.01;
           return (
             <div key={setor} className="bg-stone-50 rounded-lg p-3">
               <div className="text-xs font-bold text-stone-500 mb-2">{SETORES[setor]}</div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-[11px] text-stone-400">De (R$)</label>
-                  <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => setPreco(setor, "de", e.target.value)}
+                  <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => setPrecoDe(setor, e.target.value)}
                     className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Preço original, base do desconto" />
                 </div>
                 <div>
+                  <label className="text-[11px] text-stone-400">Por (R$)</label>
+                  <input type="number" step="0.01" value={sp.parcelado ?? ""} onChange={(e) => setPrecoPor(setor, e.target.value)}
+                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Mudar aqui recalcula o Desconto" />
+                </div>
+                <div>
                   <label className="text-[11px] text-stone-400">Desconto (%)</label>
-                  <input type="number" step="0.01" value={sp.desconto ?? ""} onChange={(e) => setPreco(setor, "desconto", e.target.value)}
-                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Aplicado sobre o preço De" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                <div>
-                  <label className={`text-[11px] ${porBate ? "text-stone-400" : "text-amber-600 font-bold"}`}>Por (R$)</label>
-                  <input type="number" step="0.01" value={sp.parcelado} onChange={(e) => setPreco(setor, "parcelado", e.target.value)}
-                    className={`w-full border rounded-lg px-2 py-1.5 text-sm font-mono ${porBate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} />
-                </div>
-                <div>
-                  <label className={`text-[11px] ${vistaBate ? "text-stone-400" : "text-amber-600 font-bold"}`}>À vista (R$)</label>
-                  <input type="number" step="0.01" value={sp.vista} onChange={(e) => setPreco(setor, "vista", e.target.value)}
-                    className={`w-full border rounded-lg px-2 py-1.5 text-sm font-mono ${vistaBate ? "border-stone-300" : "border-amber-400 bg-amber-50"}`} />
+                  <input type="number" step="0.01" value={sp.desconto ?? ""} onChange={(e) => setPrecoDesconto(setor, e.target.value)}
+                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Aplicado sobre o De — mudar aqui recalcula o Por" />
                 </div>
               </div>
 
+              {/* À vista nunca é digitado — sempre 3% sobre o Por, só como resultado. */}
               <div className="mt-2.5 pt-2.5 border-t border-stone-200 text-[11px] space-y-1">
                 <div className="flex justify-between text-stone-500"><span>Valor do desconto</span><span className="font-mono">{formatBRL(calc.valorDesconto)}</span></div>
-                <div className={`flex justify-between font-semibold ${porBate ? "text-stone-500" : "text-amber-700"}`}>
-                  <span>Por esperado</span><span className="font-mono">{formatBRL(calc.por)} {porBate ? "✓" : "⚠"}</span>
-                </div>
-                <div className="flex justify-between text-stone-500"><span>3% OFF (sobre o Por)</span><span className="font-mono">{formatBRL(calc.valor3off)}</span></div>
-                <div className={`flex justify-between font-semibold ${vistaBate ? "text-stone-500" : "text-amber-700"}`}>
-                  <span>À vista esperado</span><span className="font-mono">{formatBRL(calc.vista)} {vistaBate ? "✓" : "⚠"}</span>
+                <div className="flex justify-between font-semibold text-stone-600">
+                  <span>À vista (3% sobre o Por)</span><span className="font-mono">{formatBRL(calc.vista)}</span>
                 </div>
               </div>
               {(() => {
@@ -1896,13 +1924,6 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
                   </div>
                 );
               })()}
-
-              {(!porBate || !vistaBate) && (
-                <button type="button" onClick={() => usarCalculado(setor)}
-                  className="mt-2 text-[11px] font-bold uppercase tracking-wide text-orange-700 hover:text-orange-900">
-                  Usar valores calculados
-                </button>
-              )}
             </div>
           );
         })}
