@@ -17,7 +17,16 @@ create table if not exists produtos (
   preco_de    numeric, -- legado, não usado mais pelo app (o "De" agora fica dentro de precos, por setor)
   badges      jsonb not null default '[]',
   nota_promo  text,
-  precos      jsonb not null default '{}'  -- { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista } }
+  precos      jsonb not null default '{}', -- { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista },
+                                             --   tabelado: { de, por } } — tabelado só é editável na tela do Compras (ver src/App.jsx,
+                                             --   ProdutoForm/mostrarPrecoTabelado); é preço de produto fora de catálogo/promoção,
+                                             --   reservado pra futura página com todos os produtos da empresa pro cliente.
+  variacoes   jsonb not null default '{}'  -- preço/custo por sabor, opcional: { "<sabor>": { custo, precos: { primeira, farm,
+                                             --   tabelado } } } — mesmo formato de "custo"/"precos" acima, só que por sabor.
+                                             --   Sabor sem entrada aqui (ou produto sem sabor) usa o custo/precos gerais do
+                                             --   produto — é sempre um override opcional, nunca obrigatório (ver calcularVariacoes
+                                             --   em server/routes/produtos.js). custo de cada sabor é dado sensível igual ao custo
+                                             --   geral: só sai na API pra quem loga como compras/gerente (ver toRow).
 );
 
 -- Marca e categoria são cadastros de verdade, não só "o que já apareceu em algum produto" —
@@ -138,6 +147,7 @@ create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_re
 -- alter table produtos add column if not exists sabores jsonb not null default '[]';
 -- alter table catalogos add column if not exists data_inicio date;
 -- alter table catalogos add column if not exists data_fim date;
+-- alter table produtos add column if not exists variacoes jsonb not null default '{}';
 
 -- O backend só acessa o banco pela role dona das tabelas (bypassa RLS por padrão), então
 -- ligar RLS aqui não muda nada pro app — só impede que a API pública do Supabase

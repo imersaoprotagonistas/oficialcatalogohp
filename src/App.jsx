@@ -784,7 +784,7 @@ function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluir
           <div className="max-w-6xl mx-auto px-6 py-8">
             {saving && <div className="text-[11px] text-stone-400 mb-4">Salvando…</div>}
             <ProdutosSection produtos={produtos} setProdutos={setProdutos} podeAlterarCusto={comprador.ehGerente}
-              onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
+              mostrarPrecoTabelado onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
           </div>
         </>
       )}
@@ -887,6 +887,37 @@ function FiltroProdutosBar({ f, placeholder }) {
 }
 
 // --- Painel > Catálogos ---
+// Preço por sabor dentro de um catálogo é override opcional em cima do override opcional do
+// cadastro (ver ProdutoForm/f.variacoes): sabor sem nada aqui usa o preço geral do PRODUTO NESTE
+// CATÁLOGO (selecionados[produtoId].de/parcelado), que por sua vez já pode ter sido customizado
+// em cima do preço geral do cadastro — é a mesma cascata em mais um nível.
+// Semente inicial do painel por sabor ao abrir um produto (ou trocar de setor): puxa o que já foi
+// definido no cadastro do produto pra aquele setor (p.variacoes[sabor].precos[setor]) — só os
+// sabores que de fato têm algo lá entram aqui; o resto fica de fora e cai no preço geral.
+function porSaborInicial(p, setor) {
+  const out = {};
+  for (const sabor of p.sabores || []) {
+    const sp = p.variacoes?.[sabor]?.precos?.[setor];
+    if (sp && ((sp.de !== "" && sp.de != null) || (sp.parcelado !== "" && sp.parcelado != null))) {
+      out[sabor] = { de: sp.de, parcelado: sp.parcelado };
+    }
+  }
+  return out;
+}
+// Monta o "precosPorSabor" salvo no item do catálogo — só entra sabor com algo de fato
+// preenchido (mesma regra de override opcional do resto do sistema).
+function montarPrecosPorSabor(porSabor) {
+  const out = {};
+  for (const [sabor, sp] of Object.entries(porSabor || {})) {
+    const deFilled = sp?.de !== "" && sp?.de != null;
+    const porFilled = sp?.parcelado !== "" && sp?.parcelado != null;
+    if (!deFilled && !porFilled) continue;
+    const precoParcelado = porFilled ? Number(sp.parcelado) || 0 : 0;
+    out[sabor] = { precoDe: deFilled ? Number(sp.de) || 0 : 0, precoParcelado, precoVista: round2(precoParcelado * 0.97) };
+  }
+  return out;
+}
+
 function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, secoes, onAtualizarCuradoriaProduto, onSimular }) {
   const [criando, setCriando] = useState(false);
   const [nome, setNome] = useState("");
@@ -898,6 +929,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
   const [dataFim, setDataFim] = useState("");
   const [selecionados, setSelecionados] = useState({});
   const [somenteSelecionados, setSomenteSelecionados] = useState(false); // filtro "só selecionados" ao montar o catálogo
+  const [produtoExpandido, setProdutoExpandido] = useState(null); // produto com o painel "preço por sabor" aberto (um de cada vez)
   const [expandido, setExpandido] = useState(null);
   const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
   const [copiado, setCopiado] = useState(null);
@@ -910,9 +942,9 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
 
   function iniciarCriacao() {
     const base = {};
-    produtos.forEach((p) => { base[p.id] = { on: false, de: p.precos?.[setor]?.de ?? 0, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0 }; });
+    produtos.forEach((p) => { base[p.id] = { on: false, de: p.precos?.[setor]?.de ?? 0, vista: p.precos?.[setor]?.vista ?? 0, parcelado: p.precos?.[setor]?.parcelado ?? 0, porSabor: porSaborInicial(p, setor) }; });
     setSelecionados(base); setNome(""); setCapa(""); setSubtitulo(""); setCorDestaque(CATALOGO_COR_PADRAO);
-    setDataInicio(hojeISO()); setDataFim(""); setSomenteSelecionados(false);
+    setDataInicio(hojeISO()); setDataFim(""); setSomenteSelecionados(false); setProdutoExpandido(null);
     setEditandoId(null); setCriando(true);
     capaRequestRef.current += 1; // invalida qualquer busca de capa de uma edição anterior ainda em andamento
   }
@@ -921,11 +953,17 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
     const base = {};
     produtos.forEach((p) => {
       const item = itensPorId[p.id];
+      // Item que já existe no catálogo mantém o precosPorSabor que já foi salvo ali (mesma lógica
+      // do de/parcelado geral: usa o congelado no catálogo, não o do cadastro do produto). Produto
+      // que ainda não foi adicionado começa do que o cadastro já tiver pra esse setor.
+      const porSabor = item?.precosPorSabor
+        ? Object.fromEntries(Object.entries(item.precosPorSabor).map(([s, v]) => [s, { de: v.precoDe, parcelado: v.precoParcelado }]))
+        : porSaborInicial(p, cat.setor);
       base[p.id] = item
-        ? { on: true, de: item.precoDe ?? 0, vista: item.precoVista, parcelado: item.precoParcelado }
-        : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0 };
+        ? { on: true, de: item.precoDe ?? 0, vista: item.precoVista, parcelado: item.precoParcelado, porSabor }
+        : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0, porSabor };
     });
-    setSelecionados(base); setSomenteSelecionados(false);
+    setSelecionados(base); setSomenteSelecionados(false); setProdutoExpandido(null);
     setNome(cat.nome); setSetor(cat.setor); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
     setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
     // Limpa a capa antiga já — sem isso, o formulário abre mostrando a capa que sobrou do
@@ -941,8 +979,24 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
   function trocarSetor(novoSetor) {
     setSetor(novoSetor);
     const base = {};
-    produtos.forEach((p) => { base[p.id] = { ...selecionados[p.id], de: p.precos?.[novoSetor]?.de ?? 0, vista: p.precos?.[novoSetor]?.vista ?? 0, parcelado: p.precos?.[novoSetor]?.parcelado ?? 0 }; });
+    produtos.forEach((p) => { base[p.id] = { ...selecionados[p.id], de: p.precos?.[novoSetor]?.de ?? 0, vista: p.precos?.[novoSetor]?.vista ?? 0, parcelado: p.precos?.[novoSetor]?.parcelado ?? 0, porSabor: porSaborInicial(p, novoSetor) }; });
     setSelecionados(base);
+    setProdutoExpandido(null);
+  }
+  function setPorSabor(produtoId, sabor, campo, valorStr) {
+    setSelecionados((cur) => {
+      const atual = cur[produtoId] || {};
+      const porSaborAtual = atual.porSabor || {};
+      const spAtual = porSaborAtual[sabor] || {};
+      return { ...cur, [produtoId]: { ...atual, porSabor: { ...porSaborAtual, [sabor]: { ...spAtual, [campo]: valorStr } } } };
+    });
+  }
+  function limparPorSabor(produtoId, sabor) {
+    setSelecionados((cur) => {
+      const atual = cur[produtoId] || {};
+      const { [sabor]: _omit, ...resto } = atual.porSabor || {};
+      return { ...cur, [produtoId]: { ...atual, porSabor: resto } };
+    });
   }
   async function onCapaFile(e, setter) {
     const file = e.target.files?.[0];
@@ -951,7 +1005,12 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
   }
   function salvar(status) {
     const itens = Object.entries(selecionados).filter(([, v]) => v.on)
-      .map(([produtoId, v]) => ({ produtoId, precoDe: Number(v.de) || 0, precoVista: round2((Number(v.parcelado) || 0) * 0.97), precoParcelado: Number(v.parcelado) || 0 }));
+      .map(([produtoId, v]) => {
+        const item = { produtoId, precoDe: Number(v.de) || 0, precoVista: round2((Number(v.parcelado) || 0) * 0.97), precoParcelado: Number(v.parcelado) || 0 };
+        const precosPorSabor = montarPrecosPorSabor(v.porSabor);
+        if (Object.keys(precosPorSabor).length > 0) item.precosPorSabor = precosPorSabor;
+        return item;
+      });
     if (!nome.trim() || itens.length === 0) { alert("Dê um nome ao catálogo e selecione ao menos 1 produto."); return; }
     if (!dataInicio || !dataFim) { alert("Defina a data de início e de término da validade do catálogo."); return; }
     if (dataFim < dataInicio) { alert("A data de término não pode ser antes da data de início."); return; }
@@ -1076,7 +1135,8 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
           </div>
           <p className="text-[11px] text-stone-400 -mt-1">
             Preço por produto: <b>De</b> (opcional, riscado) · <b>Por</b> (no cartão) · <b>À vista</b> ·
-            bolinha = saúde da margem (verde/amarelo/vermelho) · <b>⚠</b> = preço não bate com a fórmula do produto
+            bolinha = saúde da margem (verde/amarelo/vermelho) · <b>⚠</b> = preço não bate com a fórmula do produto ·
+            <Pencil size={10} className="inline mx-0.5 -mt-0.5" /> = preço por sabor neste catálogo (produtos com 2+ sabores)
           </p>
           <div className="space-y-4 max-h-96 overflow-auto pr-1">
             {produtosExibidos.length === 0 && (
@@ -1107,8 +1167,10 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
                         + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`
                       : `Esperado pela fórmula (desconto de ${p.precos?.[setor]?.desconto || 0}% cadastrado no produto): `
                         + `Por ${formatBRL(calc.por)} · À vista ${formatBRL(calc.vista)}`;
+                    const temSabores = (p.sabores?.length || 0) >= 2;
                     return (
-                    <label key={p.id} className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
+                    <div key={p.id}>
+                    <label className={`flex items-center gap-3 border rounded-lg px-3 py-2 text-sm cursor-pointer flex-wrap ${selecionados[p.id]?.on ? "border-orange-400 bg-orange-50" : "border-stone-200"}`}>
                       <input type="checkbox" checked={!!selecionados[p.id]?.on}
                         onChange={(e) => setSelecionados({ ...selecionados, [p.id]: { ...selecionados[p.id], on: e.target.checked } })} />
                       <span className="flex-1 min-w-[140px]">{p.emoji} {p.marca && <b>{p.marca}</b>}{p.marca ? " | " : ""}{nomeProdutoSemMarcaDuplicada(p)} <span className="text-stone-400">({p.gramatura})</span></span>
@@ -1147,6 +1209,13 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
                         <span className={`w-2.5 h-2.5 rounded-full ${corReal.dot}`} />
                         {!bate && <span className="text-amber-600 text-xs">⚠</span>}
                       </span>
+                      {temSabores && (
+                        <button type="button" onClick={(e) => { e.preventDefault(); setProdutoExpandido(produtoExpandido === p.id ? null : p.id); }}
+                          className={`shrink-0 p-1 rounded-full border ${produtoExpandido === p.id ? "border-stone-900 bg-stone-100" : "border-stone-300 text-stone-500 hover:border-stone-400"}`}
+                          title="Preço por sabor neste catálogo">
+                          <Pencil size={11} />
+                        </button>
+                      )}
                       {selecionados[p.id]?.on && secoesDoSetor.length > 0 && (
                         <div className="basis-full flex flex-wrap items-center gap-1.5 pl-7">
                           <span className="text-[10px] text-stone-400 uppercase font-bold">Seção:</span>
@@ -1159,6 +1228,46 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
                         </div>
                       )}
                     </label>
+                    {temSabores && produtoExpandido === p.id && (
+                      <div className="mt-1.5 ml-7 border border-stone-200 rounded-lg p-2.5 space-y-1.5 bg-stone-50">
+                        <div className="text-[10px] font-bold uppercase text-stone-400">
+                          Preço por sabor neste catálogo — em branco usa o preço geral do produto acima ({formatBRL(parceladoNum)})
+                        </div>
+                        {(p.sabores || []).map((s) => {
+                          const spSabor = sel.porSabor?.[s] || {};
+                          const deFilled = spSabor.de !== "" && spSabor.de != null;
+                          const porFilled = spSabor.parcelado !== "" && spSabor.parcelado != null;
+                          const parceladoEfetivo = porFilled ? round2(Number(spSabor.parcelado) || 0) : parceladoNum;
+                          const vistaEfetivo = round2(parceladoEfetivo * 0.97);
+                          const custoEfetivo = p.variacoes?.[s]?.custo ?? p.custo;
+                          const margemEfetiva = temCusto ? round2(vistaEfetivo - round2(custoEfetivo || 0)) : null;
+                          const margemEfetivaPct = temCusto && vistaEfetivo > 0 ? round2((margemEfetiva / vistaEfetivo) * 100) : 0;
+                          const corEfetiva = temCusto ? corMargem(margemEfetivaPct) : { dot: "bg-stone-300" };
+                          return (
+                            <div key={s} className="flex items-center gap-2 text-xs">
+                              <span className="flex-1 min-w-[90px] truncate" title={s}>{s}</span>
+                              <input type="number" step="0.01" value={spSabor.de ?? ""} placeholder={formatBRL(sel.de)}
+                                onChange={(e) => setPorSabor(p.id, s, "de", e.target.value)}
+                                className="w-20 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="De deste sabor (opcional)" />
+                              <input type="number" step="0.01" value={spSabor.parcelado ?? ""} placeholder={formatBRL(sel.parcelado)}
+                                onChange={(e) => setPorSabor(p.id, s, "parcelado", e.target.value)}
+                                className="w-20 border border-stone-300 rounded px-2 py-1 text-xs font-mono" title="Por deste sabor" />
+                              <span className="w-16 text-right font-mono text-stone-500" title="À vista (3% sobre o Por)">{formatBRL(vistaEfetivo)}</span>
+                              {temCusto && (
+                                <span className={`w-2.5 h-2.5 rounded-full ${corEfetiva.dot}`}
+                                  title={`Margem à vista: ${formatBRL(margemEfetiva)} (${formatPct(margemEfetivaPct)})`} />
+                              )}
+                              {(deFilled || porFilled) ? (
+                                <button type="button" onClick={() => limparPorSabor(p.id, s)} className="text-[10px] text-stone-400 hover:text-red-600 shrink-0">
+                                  Limpar
+                                </button>
+                              ) : <span className="w-[38px]" />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    </div>
                     );
                   })}
                 </div>
@@ -1453,13 +1562,15 @@ function SecaoCard({ secao, atualizarSecao, removerSecao, onSubir, onDescer }) {
 // dado de Compras, só quem loga como compras tem permissão de gravar produto no backend.
 // mostrarMargem=false (usado pelo Gerente) esconde custo/margem por completo — dado exclusivo
 // de Compras (ver server/routes/produtos.js: o backend nem manda o campo "custo" pro gerente).
-function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem = true, podeAlterarCusto = true, onRenomearCampo, onExcluirCampo }) {
+function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem = true, podeAlterarCusto = true, mostrarPrecoTabelado = false, onRenomearCampo, onExcluirCampo }) {
   const [editing, setEditing] = useState(null);
   const [gerenciandoCampos, setGerenciandoCampos] = useState(false);
   const imagemRequestRef = useRef(0); // descarta a busca da imagem se o usuário trocar de produto antes dela terminar
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
     marca: "", sabores: [], custo: "", badges: [],
-    precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" } } };
+    precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" },
+      tabelado: { de: "", por: "" } },
+    variacoes: {} }; // preço/custo por sabor, opcional — ver ProdutoForm
 
   const filtro = useFiltroProdutos(produtos);
 
@@ -1523,7 +1634,8 @@ function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem
         </div>
       )}
       {editavel && editing && !carregandoImagem && (
-        <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas} podeAlterarCusto={podeAlterarCusto} />
+        <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas}
+          podeAlterarCusto={podeAlterarCusto} mostrarPrecoTabelado={mostrarPrecoTabelado} />
       )}
 
       <FiltroProdutosBar f={filtro} />
@@ -1739,37 +1851,150 @@ function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
   );
 }
 
+// Bloco De/Por/Desconto/À vista/Margem de um setor (Primeira Compra ou Farm) — reaproveitado tanto
+// pro preço geral do produto quanto pro preço específico de um sabor (ver "Sabores" em ProdutoForm).
+function BlocoPrecoSetor({ titulo, sp, custo, onDe, onPor, onDesconto }) {
+  const calc = calcularPrecoSetor({ de: sp.de, desconto: sp.desconto, custo });
+  return (
+    <div className="bg-stone-50 rounded-lg p-3">
+      <div className="text-xs font-bold text-stone-500 mb-2">{titulo}</div>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <label className="text-[11px] text-stone-400">De (R$)</label>
+          <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => onDe(e.target.value)}
+            className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Preço original, base do desconto" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400">Por (R$)</label>
+          <input type="number" step="0.01" value={sp.parcelado ?? ""} onChange={(e) => onPor(e.target.value)}
+            className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Mudar aqui recalcula o Desconto" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400">Desconto (%)</label>
+          <input type="number" step="0.01" value={sp.desconto ?? ""} onChange={(e) => onDesconto(e.target.value)}
+            className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Aplicado sobre o De — mudar aqui recalcula o Por" />
+        </div>
+      </div>
+
+      {/* À vista nunca é digitado — sempre 3% sobre o Por, só como resultado. */}
+      <div className="mt-2.5 pt-2.5 border-t border-stone-200 text-[11px] space-y-1">
+        <div className="flex justify-between text-stone-500"><span>Valor do desconto</span><span className="font-mono">{formatBRL(calc.valorDesconto)}</span></div>
+        <div className="flex justify-between font-semibold text-stone-600">
+          <span>À vista (3% sobre o Por)</span><span className="font-mono">{formatBRL(calc.vista)}</span>
+        </div>
+      </div>
+      {(() => {
+        const cor = corMargem(calc.margemPct);
+        return (
+          <div className={`flex items-center justify-between mt-1.5 rounded-lg border px-2.5 py-1.5 ${cor.fundo} ${cor.borda}`} title={cor.label}>
+            <span className={`flex items-center gap-1.5 text-[11px] font-bold ${cor.texto}`}>
+              <span className={`w-2 h-2 rounded-full ${cor.dot}`} /> Margem (à vista)
+            </span>
+            <span className={`font-mono text-xs font-bold ${cor.texto}`}>{formatBRL(calc.margemReais)} ({formatPct(calc.margemPct)})</span>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// Idem, versão do Preço Tabelado — só De/Por, sem desconto (ver ProdutoForm/mostrarPrecoTabelado).
+function BlocoPrecoTabelado({ sp, descricao, onDe, onPor }) {
+  return (
+    <div className="bg-stone-50 rounded-lg p-3">
+      <div className="text-xs font-bold text-stone-500 mb-2">Preço Tabelado</div>
+      {descricao && <p className="text-[11px] text-stone-400 mb-2">{descricao}</p>}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[11px] text-stone-400">De (R$)</label>
+          <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => onDe(e.target.value)}
+            className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+        </div>
+        <div>
+          <label className="text-[11px] text-stone-400">Por (R$)</label>
+          <input type="number" step="0.01" value={sp.por ?? ""} onChange={(e) => onPor(e.target.value)}
+            className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // podeAlterarCusto=false (comprador comum, sem eh_gerente) desabilita o campo de custo — só o
 // gerente de compras mexe nesse número (ver server/routes/produtos.js pro mesmo bloqueio na API).
 // Seção curada não aparece aqui de propósito — é curadoria de catálogo (ver CatalogosSection),
 // não cadastro de compra. O form só preserva f.badges como veio, pra não apagar o que o
 // gerente já tiver marcado ao salvar o resto do produto.
-function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto = true }) {
+function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto = true, mostrarPrecoTabelado = false }) {
   const [f, setF] = useState(inicial);
   // De, Desconto e Por continuam os três editáveis — mudar qualquer um recalcula os outros na
   // hora, sem precisar de botão pra sincronizar. À vista nunca é digitado: é sempre 3% sobre o
   // Por, sai só como resultado (ver render). Editar "De" ou "Desconto" recalcula o Por (fórmula
   // de cima pra baixo); editar o "Por" direto (ex: negociou um valor fechado) recalcula o
   // Desconto pra bater com ele — é o que permite aumentar o desconto na mão e ver o Por cair.
-  function setPrecoDe(setor, valorStr) {
+  // Todo setter abaixo recebe "sabor" como primeiro argumento: null/undefined mexe no preço geral
+  // do produto (f.precos), uma string mexe no preço específico daquele sabor (f.variacoes[sabor].
+  // precos) — é o que dá pra reaproveitar os mesmos setters tanto no bloco geral quanto no painel
+  // "Preço específico" de cada sabor (ver Sabores, mais abaixo).
+  function setPrecoDe(sabor, setor, valorStr) {
     setF((cur) => {
-      const sp = cur.precos[setor];
+      const precosAtuais = sabor ? (cur.variacoes[sabor]?.precos || {}) : cur.precos;
+      const sp = precosAtuais[setor] || {};
       const { por } = calcularPrecoSetor({ de: Number(valorStr) || 0, desconto: Number(sp.desconto) || 0 });
-      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, de: valorStr, parcelado: por } } };
+      const novoSetor = { ...sp, de: valorStr, parcelado: por };
+      if (!sabor) return { ...cur, precos: { ...cur.precos, [setor]: novoSetor } };
+      const variacaoAtual = cur.variacoes[sabor] || { custo: "", precos: {} };
+      return { ...cur, variacoes: { ...cur.variacoes, [sabor]: { ...variacaoAtual, precos: { ...variacaoAtual.precos, [setor]: novoSetor } } } };
     });
   }
-  function setPrecoDesconto(setor, valorStr) {
+  function setPrecoDesconto(sabor, setor, valorStr) {
     setF((cur) => {
-      const sp = cur.precos[setor];
+      const precosAtuais = sabor ? (cur.variacoes[sabor]?.precos || {}) : cur.precos;
+      const sp = precosAtuais[setor] || {};
       const { por } = calcularPrecoSetor({ de: Number(sp.de) || 0, desconto: Number(valorStr) || 0 });
-      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, desconto: valorStr, parcelado: por } } };
+      const novoSetor = { ...sp, desconto: valorStr, parcelado: por };
+      if (!sabor) return { ...cur, precos: { ...cur.precos, [setor]: novoSetor } };
+      const variacaoAtual = cur.variacoes[sabor] || { custo: "", precos: {} };
+      return { ...cur, variacoes: { ...cur.variacoes, [sabor]: { ...variacaoAtual, precos: { ...variacaoAtual.precos, [setor]: novoSetor } } } };
     });
   }
-  function setPrecoPor(setor, valorStr) {
+  function setPrecoPor(sabor, setor, valorStr) {
     setF((cur) => {
-      const sp = cur.precos[setor];
+      const precosAtuais = sabor ? (cur.variacoes[sabor]?.precos || {}) : cur.precos;
+      const sp = precosAtuais[setor] || {};
       const desconto = descontoDeDePor(sp.de, valorStr);
-      return { ...cur, precos: { ...cur.precos, [setor]: { ...sp, parcelado: valorStr, desconto } } };
+      const novoSetor = { ...sp, parcelado: valorStr, desconto };
+      if (!sabor) return { ...cur, precos: { ...cur.precos, [setor]: novoSetor } };
+      const variacaoAtual = cur.variacoes[sabor] || { custo: "", precos: {} };
+      return { ...cur, variacoes: { ...cur.variacoes, [sabor]: { ...variacaoAtual, precos: { ...variacaoAtual.precos, [setor]: novoSetor } } } };
+    });
+  }
+  // Preço Tabelado: só usado hoje pelo setor de Compras, pra produtos que ainda não entraram
+  // em catálogo/promoção (ver futura página de todos os produtos pro cliente). Diferente dos
+  // setores acima, não tem % de desconto — só De e Por, cada um digitado direto, sem sync entre eles.
+  function setPrecoTabelado(sabor, campo, valorStr) {
+    setF((cur) => {
+      if (!sabor) return { ...cur, precos: { ...cur.precos, tabelado: { ...(cur.precos.tabelado || {}), [campo]: valorStr } } };
+      const variacaoAtual = cur.variacoes[sabor] || { custo: "", precos: {} };
+      const spTab = variacaoAtual.precos.tabelado || {};
+      return { ...cur, variacoes: { ...cur.variacoes, [sabor]: { ...variacaoAtual, precos: { ...variacaoAtual.precos, tabelado: { ...spTab, [campo]: valorStr } } } } };
+    });
+  }
+  // Custo por sabor — mesmo dado sensível que o custo geral (f.custo): também trava pra quem não
+  // tem podeAlterarCusto (o input fica disabled no render, então na prática este setter só roda
+  // pra quem pode mexer).
+  function setCustoVariacao(sabor, valorStr) {
+    setF((cur) => {
+      const variacaoAtual = cur.variacoes[sabor] || { custo: "", precos: {} };
+      return { ...cur, variacoes: { ...cur.variacoes, [sabor]: { ...variacaoAtual, custo: valorStr } } };
+    });
+  }
+  // "Usar preço do produto" — descarta o preço/custo específico desse sabor por completo,
+  // voltando a cair no preço geral (é a essência de ser um override opcional, não obrigatório).
+  function removerVariacao(sabor) {
+    setF((cur) => {
+      const { [sabor]: _omit, ...resto } = cur.variacoes || {};
+      return { ...cur, variacoes: resto };
     });
   }
   async function onImagemFile(e) {
@@ -1785,7 +2010,28 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
     setF({ ...f, sabores: [...(f.sabores || []), v] });
     setNovoSabor("");
   }
-  function removerSabor(s) { setF({ ...f, sabores: (f.sabores || []).filter((x) => x !== s) }); }
+  // Remover o sabor também descarta o preço específico dele — não faz sentido guardar preço
+  // de um sabor que não existe mais no produto.
+  function removerSabor(s) {
+    setF((cur) => {
+      const { [s]: _omit, ...variacoesResto } = cur.variacoes || {};
+      return { ...cur, sabores: (cur.sabores || []).filter((x) => x !== s), variacoes: variacoesResto };
+    });
+    if (saborExpandido === s) setSaborExpandido(null);
+  }
+  // Painel "Preço específico" — um sabor aberto por vez (acordeão), só faz sentido com 2+ sabores
+  // (com 1 só, o preço geral do produto já É o preço daquele sabor; ver mesma regra no catálogo
+  // público, modalItem.produto.sabores?.length >= 2).
+  const [saborExpandido, setSaborExpandido] = useState(null);
+  function saborTemPrecoProprio(sabor) {
+    const v = f.variacoes?.[sabor];
+    if (!v) return false;
+    const custoPreenchido = v.custo !== "" && v.custo !== undefined && v.custo !== null;
+    const precoPreenchido = Object.values(v.precos || {}).some(
+      (sp) => (sp?.de !== "" && sp?.de != null) || (sp?.parcelado !== "" && sp?.parcelado != null) || (sp?.por !== "" && sp?.por != null)
+    );
+    return custoPreenchido || precoPreenchido;
+  }
   // Desconto (%) e À vista não são mais digitados — saem sempre de "De"/"Por": desconto é a
   // diferença entre os dois, à vista é sempre 3% sobre o Por. Calculado de novo aqui (não só
   // na exibição) pra garantir que o que é salvo bate exatamente com o que apareceu na tela.
@@ -1797,12 +2043,41 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
     const parcelado = Number(sp.parcelado) || 0;
     return { de, desconto, parcelado, vista: round2(parcelado * 0.97) };
   }
+  const algumPrecoPreenchido = (sp) =>
+    !!sp && ((sp.de !== "" && sp.de != null) || (sp.parcelado !== "" && sp.parcelado != null) || (sp.por !== "" && sp.por != null));
+  // Monta o payload de "variacoes" a partir do estado — só entra sabor que tiver algo de fato
+  // preenchido (custo ou algum preço); é isso que faz o override ser opcional (ver schema.sql e
+  // calcularVariacoes em server/routes/produtos.js). Sabor removido da lista (f.sabores) nem chega
+  // a ser considerado aqui, então sai sozinho do que é salvo. "tabelado" nunca é filtrado por
+  // mostrarPrecoTabelado — mesma lógica do preço geral: quem não tem UI pra editar só reenvia o
+  // que já estava no estado, sem risco de apagar o que o Compras cadastrou.
+  function montarVariacoes() {
+    const out = {};
+    for (const sabor of f.sabores || []) {
+      const v = f.variacoes?.[sabor];
+      if (!v) continue;
+      const custoPreenchido = v.custo !== "" && v.custo !== undefined && v.custo !== null;
+      const precos = {};
+      if (algumPrecoPreenchido(v.precos?.primeira)) precos.primeira = montarPreco(v.precos.primeira);
+      if (algumPrecoPreenchido(v.precos?.farm)) precos.farm = montarPreco(v.precos.farm);
+      if (algumPrecoPreenchido(v.precos?.tabelado)) {
+        precos.tabelado = { de: Number(v.precos.tabelado.de) || 0, por: Number(v.precos.tabelado.por) || 0 };
+      }
+      if (!custoPreenchido && Object.keys(precos).length === 0) continue; // nada customizado — cai no preço geral
+      out[sabor] = { ...(custoPreenchido ? { custo: Number(v.custo) || 0 } : {}), precos };
+    }
+    return out;
+  }
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSalvar({ ...f, custo: Number(f.custo) || 0, precos: {
       primeira: montarPreco(f.precos.primeira),
       farm: montarPreco(f.precos.farm),
-    } }); }}
+      // Sempre incluído, mesmo onde não tem UI pra editar (Gerente comercial, ver mostrarPrecoTabelado
+      // abaixo): f.precos.tabelado só muda via setPrecoTabelado, que só dispara com o campo visível —
+      // então quem não vê o campo simplesmente reenvia o valor que já estava salvo, sem risco de zerar.
+      tabelado: { de: Number(f.precos.tabelado?.de) || 0, por: Number(f.precos.tabelado?.por) || 0 },
+    }, variacoes: montarVariacoes() }); }}
       className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
       <div className="grid sm:grid-cols-4 gap-3">
         <div className="sm:col-span-2">
@@ -1858,16 +2133,32 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
           )}
         </div>
       </div>
+      {mostrarPrecoTabelado && (
+        <BlocoPrecoTabelado sp={f.precos.tabelado || { de: "", por: "" }}
+          descricao="Preço de produtos fora de catálogo/promoção — usado na futura página com todos os produtos da empresa."
+          onDe={(v) => setPrecoTabelado(null, "de", v)} onPor={(v) => setPrecoTabelado(null, "por", v)} />
+      )}
       <div>
         <label className="text-[11px] text-stone-400 block mb-1.5">
           Sabores (opcional — se o produto tiver 2 ou mais, o cliente escolhe a quantidade de cada um no catálogo)
         </label>
         <div className="flex flex-wrap gap-2 mb-2">
           {(f.sabores || []).map((s) => (
-            <span key={s} className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-stone-900 text-white">
-              {s}
-              <button type="button" onClick={() => removerSabor(s)} className="hover:text-red-300"><X size={11} /></button>
-            </span>
+            <div key={s} className="inline-flex items-center gap-1">
+              <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full ${saborTemPrecoProprio(s) ? "bg-orange-500 text-neutral-950" : "bg-stone-900 text-white"}`}>
+                {s}
+                <button type="button" onClick={() => removerSabor(s)} className="hover:text-red-300"><X size={11} /></button>
+              </span>
+              {/* Preço por sabor só faz sentido com 2+ sabores — com 1 só, o preço geral do produto
+                  já é o preço dele (mesma regra do catálogo público pro cliente escolher sabor). */}
+              {(f.sabores || []).length >= 2 && (
+                <button type="button" onClick={() => setSaborExpandido(saborExpandido === s ? null : s)}
+                  className={`p-1 rounded-full border ${saborExpandido === s ? "border-stone-900 bg-stone-100" : "border-stone-300 text-stone-500 hover:border-stone-400"}`}
+                  title={saborTemPrecoProprio(s) ? "Editar preço específico deste sabor" : "Definir preço específico pra este sabor"}>
+                  <Pencil size={11} />
+                </button>
+              )}
+            </div>
           ))}
           {(f.sabores || []).length === 0 && <span className="text-[11px] text-stone-400">Nenhum sabor cadastrado — produto sem variação de sabor.</span>}
         </div>
@@ -1880,53 +2171,48 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
             Adicionar
           </button>
         </div>
+
+        {saborExpandido && (f.sabores || []).includes(saborExpandido) && (
+          <div className="border border-stone-200 rounded-lg p-3 mt-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-stone-600">Preço específico — {saborExpandido}</div>
+              <button type="button" onClick={() => removerVariacao(saborExpandido)} className="text-[11px] text-stone-400 hover:text-red-600">
+                Usar preço do produto
+              </button>
+            </div>
+            <p className="text-[11px] text-stone-400 -mt-2">
+              Deixe em branco pra esse sabor usar o preço/custo geral do produto (acima) — preencha só o que for diferente.
+            </p>
+            <div>
+              <label className="text-[11px] text-stone-400 block mb-1">Custo (R$) deste sabor</label>
+              <input type="number" step="0.01" value={f.variacoes?.[saborExpandido]?.custo ?? ""} disabled={!podeAlterarCusto}
+                onChange={(e) => setCustoVariacao(saborExpandido, e.target.value)}
+                placeholder={`Padrão do produto: ${formatBRL(f.custo)}`}
+                className={`w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono ${!podeAlterarCusto ? "bg-stone-100 text-stone-400 cursor-not-allowed" : ""}`}
+                title={podeAlterarCusto ? "Custo deste sabor, usado pra calcular a margem dele" : "Somente o gerente de compras pode alterar o custo do produto."} />
+            </div>
+            {mostrarPrecoTabelado && (
+              <BlocoPrecoTabelado sp={f.variacoes?.[saborExpandido]?.precos?.tabelado || { de: "", por: "" }}
+                onDe={(v) => setPrecoTabelado(saborExpandido, "de", v)} onPor={(v) => setPrecoTabelado(saborExpandido, "por", v)} />
+            )}
+            <div className="grid sm:grid-cols-2 gap-3">
+              {["primeira", "farm"].map((setor) => (
+                <BlocoPrecoSetor key={setor} titulo={SETORES[setor]}
+                  sp={f.variacoes?.[saborExpandido]?.precos?.[setor] || { de: "", desconto: "", parcelado: "" }}
+                  custo={f.variacoes?.[saborExpandido]?.custo || f.custo}
+                  onDe={(v) => setPrecoDe(saborExpandido, setor, v)}
+                  onPor={(v) => setPrecoPor(saborExpandido, setor, v)}
+                  onDesconto={(v) => setPrecoDesconto(saborExpandido, setor, v)} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       <div className="grid sm:grid-cols-2 gap-4 pt-2">
-        {["primeira", "farm"].map((setor) => {
-          const sp = f.precos[setor];
-          const calc = calcularPrecoSetor({ de: sp.de, desconto: sp.desconto, custo: f.custo });
-          return (
-            <div key={setor} className="bg-stone-50 rounded-lg p-3">
-              <div className="text-xs font-bold text-stone-500 mb-2">{SETORES[setor]}</div>
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="text-[11px] text-stone-400">De (R$)</label>
-                  <input type="number" step="0.01" value={sp.de ?? ""} onChange={(e) => setPrecoDe(setor, e.target.value)}
-                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Preço original, base do desconto" />
-                </div>
-                <div>
-                  <label className="text-[11px] text-stone-400">Por (R$)</label>
-                  <input type="number" step="0.01" value={sp.parcelado ?? ""} onChange={(e) => setPrecoPor(setor, e.target.value)}
-                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Mudar aqui recalcula o Desconto" />
-                </div>
-                <div>
-                  <label className="text-[11px] text-stone-400">Desconto (%)</label>
-                  <input type="number" step="0.01" value={sp.desconto ?? ""} onChange={(e) => setPrecoDesconto(setor, e.target.value)}
-                    className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" title="Aplicado sobre o De — mudar aqui recalcula o Por" />
-                </div>
-              </div>
-
-              {/* À vista nunca é digitado — sempre 3% sobre o Por, só como resultado. */}
-              <div className="mt-2.5 pt-2.5 border-t border-stone-200 text-[11px] space-y-1">
-                <div className="flex justify-between text-stone-500"><span>Valor do desconto</span><span className="font-mono">{formatBRL(calc.valorDesconto)}</span></div>
-                <div className="flex justify-between font-semibold text-stone-600">
-                  <span>À vista (3% sobre o Por)</span><span className="font-mono">{formatBRL(calc.vista)}</span>
-                </div>
-              </div>
-              {(() => {
-                const cor = corMargem(calc.margemPct);
-                return (
-                  <div className={`flex items-center justify-between mt-1.5 rounded-lg border px-2.5 py-1.5 ${cor.fundo} ${cor.borda}`} title={cor.label}>
-                    <span className={`flex items-center gap-1.5 text-[11px] font-bold ${cor.texto}`}>
-                      <span className={`w-2 h-2 rounded-full ${cor.dot}`} /> Margem (à vista)
-                    </span>
-                    <span className={`font-mono text-xs font-bold ${cor.texto}`}>{formatBRL(calc.margemReais)} ({formatPct(calc.margemPct)})</span>
-                  </div>
-                );
-              })()}
-            </div>
-          );
-        })}
+        {["primeira", "farm"].map((setor) => (
+          <BlocoPrecoSetor key={setor} titulo={SETORES[setor]} sp={f.precos[setor]} custo={f.custo}
+            onDe={(v) => setPrecoDe(null, setor, v)} onPor={(v) => setPrecoPor(null, setor, v)} onDesconto={(v) => setPrecoDesconto(null, setor, v)} />
+        ))}
       </div>
       <div className="flex gap-2 pt-1">
         <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar produto</button>
