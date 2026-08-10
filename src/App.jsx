@@ -1911,7 +1911,7 @@ function BlocoPrecoTabelado({ sp, descricao, onDe, onPor }) {
             className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
         </div>
         <div>
-          <label className="text-[11px] text-stone-400">Por (R$)</label>
+          <label className="text-[11px] text-stone-400">À vista (R$)</label>
           <input type="number" step="0.01" value={sp.por ?? ""} onChange={(e) => onPor(e.target.value)}
             className="w-full border border-stone-300 rounded-lg px-2 py-1.5 text-sm font-mono" />
         </div>
