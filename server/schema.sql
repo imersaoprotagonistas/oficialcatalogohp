@@ -18,13 +18,18 @@ create table if not exists produtos (
   badges      jsonb not null default '[]',
   nota_promo  text,
   precos      jsonb not null default '{}', -- { primeira: { de, desconto, parcelado, vista }, farm: { de, desconto, parcelado, vista },
-                                             --   tabelado: { de, por } } — tabelado só é editável na tela do Compras (ver src/App.jsx,
-                                             --   ProdutoForm/mostrarPrecoTabelado); é preço de produto fora de catálogo/promoção,
-                                             --   reservado pra futura página com todos os produtos da empresa pro cliente.
+                                             --   tabelado: { de, por }, tabeladoPrimeiraCompra: { de, desconto, parcelado, vista } } —
+                                             --   tabelado e tabeladoPrimeiraCompra só são editáveis na tela do Compras (ver src/App.jsx,
+                                             --   ProdutoForm/mostrarPrecoTabelado). "tabelado" é preço de produto fora de catálogo/
+                                             --   promoção, reservado pra futura página com todos os produtos da empresa pro cliente;
+                                             --   "tabeladoPrimeiraCompra" é a mesma ideia, só que o preço vale apenas na 1ª compra do
+                                             --   cliente com a HP Distribuidora (estratégia comercial pra converter cliente novo) — não
+                                             --   confundir com o setor "primeira" acima, que é o canal "1º Compra" dos consultores no
+                                             --   catálogo normal, sem relação com este preço tabelado.
   variacoes   jsonb not null default '{}'  -- preço/custo por sabor, opcional: { "<sabor>": { custo, precos: { primeira, farm,
-                                             --   tabelado } } } — mesmo formato de "custo"/"precos" acima, só que por sabor.
-                                             --   Sabor sem entrada aqui (ou produto sem sabor) usa o custo/precos gerais do
-                                             --   produto — é sempre um override opcional, nunca obrigatório (ver calcularVariacoes
+                                             --   tabelado, tabeladoPrimeiraCompra } } } — mesmo formato de "custo"/"precos" acima, só
+                                             --   que por sabor. Sabor sem entrada aqui (ou produto sem sabor) usa o custo/precos gerais
+                                             --   do produto — é sempre um override opcional, nunca obrigatório (ver calcularVariacoes
                                              --   em server/routes/produtos.js). custo de cada sabor é dado sensível igual ao custo
                                              --   geral: só sai na API pra quem loga como compras/gerente (ver toRow).
 );
@@ -75,14 +80,32 @@ create table if not exists consultores (
 -- login individual do consultor, mas sem whatsapp/setor (não atende cliente final).
 -- eh_gerente: só quem tem essa flag vê a aba "Equipe" e pode cadastrar/editar outros
 -- compradores (ver server/routes/compradores.js) — o gerente comercial não tem acesso a isso.
+-- eh_gerente sempre pode editar custo (não depende do campo abaixo). pode_editar_custo:
+-- concedido individualmente pelo gerente de compras a um comprador comum que NÃO é gerente —
+-- é o que decide, produto a produto (calcularCusto em server/routes/produtos.js), se esse
+-- comprador em especial pode mexer no custo. Default false: preserva o comportamento de antes
+-- dessa coluna existir (só gerente editava) até o gerente de compras decidir liberar alguém.
 create table if not exists compradores (
-  id          text primary key,
-  nome        text not null,
-  email       text not null unique,
-  senha_hash  text not null,
-  eh_gerente  boolean not null default false,
-  criado_em   timestamptz not null default now()
+  id                 text primary key,
+  nome               text not null,
+  email              text not null unique,
+  senha_hash         text not null,
+  eh_gerente         boolean not null default false,
+  pode_editar_custo  boolean not null default false,
+  criado_em          timestamptz not null default now()
 );
+
+-- Config única da empresa (1 linha fixa, id='global') — hoje só tem esse flag; se crescer,
+-- essa linha ganha mais colunas em vez de virar tabela nova pra cada configuração.
+-- gerente_comercial_pode_custo: já que o gerente comercial não tem conta individual (login
+-- único, sem id — ver server/routes/auth.js), não dá pra usar um campo por-pessoa como o
+-- pode_editar_custo do comprador acima; é o gerente de compras quem liga/desliga isso pra
+-- TODO gerente comercial de uma vez (aba Equipe, ver src/App.jsx/CompradoresSection).
+create table if not exists configuracoes (
+  id                            text primary key default 'global',
+  gerente_comercial_pode_custo  boolean not null default true
+);
+insert into configuracoes (id) values ('global') on conflict (id) do nothing;
 
 create table if not exists catalogos (
   id            text primary key,
@@ -148,6 +171,12 @@ create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_re
 -- alter table catalogos add column if not exists data_inicio date;
 -- alter table catalogos add column if not exists data_fim date;
 -- alter table produtos add column if not exists variacoes jsonb not null default '{}';
+-- alter table compradores add column if not exists pode_editar_custo boolean not null default false;
+-- create table if not exists configuracoes (
+--   id                            text primary key default 'global',
+--   gerente_comercial_pode_custo  boolean not null default true
+-- );
+-- insert into configuracoes (id) values ('global') on conflict (id) do nothing;
 
 -- O backend só acessa o banco pela role dona das tabelas (bypassa RLS por padrão), então
 -- ligar RLS aqui não muda nada pro app — só impede que a API pública do Supabase

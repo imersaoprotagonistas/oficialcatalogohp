@@ -12,7 +12,7 @@ const router = Router();
 // De propósito não aceita o login de "gerente" (comercial): o setor de Compras é isolado —
 // o gerente comercial não pode ver nem gerenciar nada daqui.
 function toRow(c) {
-  return { id: c.id, nome: c.nome, email: c.email, ehGerente: c.eh_gerente };
+  return { id: c.id, nome: c.nome, email: c.email, ehGerente: c.eh_gerente, podeEditarCusto: c.pode_editar_custo };
 }
 
 // Só quem tem eh_gerente=true pode ver/gerenciar a equipe — um comprador comum (a maioria)
@@ -34,8 +34,8 @@ router.post("/", requireAuth(["compras"]), soGerenteDeCompras, ah(async (req, re
   const id = b.id || randomUUID();
   const senhaHash = await hashSenha(b.senha);
   const { rows } = await pool.query(
-    `insert into compradores (id, nome, email, senha_hash, eh_gerente) values ($1,$2,$3,$4,$5) returning *`,
-    [id, b.nome, b.email, senhaHash, !!b.ehGerente]
+    `insert into compradores (id, nome, email, senha_hash, eh_gerente, pode_editar_custo) values ($1,$2,$3,$4,$5,$6) returning *`,
+    [id, b.nome, b.email, senhaHash, !!b.ehGerente, !!b.podeEditarCusto]
   );
   res.status(201).json(toRow(rows[0]));
 }));
@@ -44,9 +44,9 @@ router.put("/:id", requireAuth(["compras"]), soGerenteDeCompras, ah(async (req, 
   const b = req.body || {};
   const senhaHash = b.senha ? await hashSenha(b.senha) : null;
   const { rows } = await pool.query(
-    `update compradores set nome=$1, email=$2, senha_hash=coalesce($3, senha_hash), eh_gerente=$4
-     where id=$5 returning *`,
-    [b.nome, b.email, senhaHash, !!b.ehGerente, req.params.id]
+    `update compradores set nome=$1, email=$2, senha_hash=coalesce($3, senha_hash), eh_gerente=$4, pode_editar_custo=$5
+     where id=$6 returning *`,
+    [b.nome, b.email, senhaHash, !!b.ehGerente, !!b.podeEditarCusto, req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ erro: "Comprador(a) não encontrado(a)." });
   res.json(toRow(rows[0]));

@@ -89,6 +89,14 @@ export const api = {
     listar: () => request("/buscas"),
   },
 
+  // Config única da empresa — hoje só "gerente comercial pode editar custo?" (ver
+  // server/routes/configuracoes.js e schema.sql). GET liberado pra compras/gerente; PUT só
+  // pro gerente de compras (checado no backend, não aqui).
+  configuracoes: {
+    obter: () => request("/configuracoes"),
+    atualizar: (dados) => request("/configuracoes", { method: "PUT", body: dados }),
+  },
+
   envios: {
     listar: () => request("/envios"),
     buscar: (id) => request(`/envios/${id}`).catch(() => null),

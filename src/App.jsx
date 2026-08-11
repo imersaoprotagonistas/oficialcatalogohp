@@ -200,6 +200,11 @@ export default function App() {
   const [secoes, setSecoes] = useState([]);
   const [envios, setEnvios] = useState([]);
   const [buscas, setBuscas] = useState([]); // buscas sem resultado no catálogo público — só o gerente enxerga
+  // Config única da empresa (ver server/routes/configuracoes.js) — hoje só esse flag. Default
+  // true bate com o comportamento de antes dele existir (gerente comercial sempre podia editar
+  // custo); só é carregado depois do login (rota exige compras/gerente), então esse valor
+  // inicial só importa no instante entre "login" e a resposta chegar.
+  const [config, setConfigState] = useState({ gerenteComercialPodeCusto: true });
 
   const [view, setView] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
@@ -385,7 +390,9 @@ export default function App() {
     const { token } = await api.auth.loginGerente(senha);
     api.setToken(token);
     setCurrentUser({ role: "gerente" });
-    await Promise.all([carregarDadosPublicos(), carregarEnvios("gerente")]);
+    // Precisa saber se o gerente de compras liberou custo pro gerente comercial (flag global,
+    // ver server/routes/configuracoes.js) antes de decidir se o campo Custo fica editável.
+    await Promise.all([carregarDadosPublicos(), carregarEnvios("gerente"), api.configuracoes.obter().then(setConfigState)]);
     setView("gerente");
   }
   async function loginConsultor(email, senha) {
@@ -400,12 +407,18 @@ export default function App() {
     api.setToken(token);
     setCurrentUser({ role: "compras", ...user });
     // Recarrega produtos já autenticado — agora a API inclui o custo, que antes de logar não vem.
-    const chamadas = [carregarDadosPublicos(), carregarEnvios("compras")];
+    const chamadas = [carregarDadosPublicos(), carregarEnvios("compras"), api.configuracoes.obter().then(setConfigState)];
     // Só quem tem eh_gerente vê a equipe (ver server/routes/compradores.js) — comprador comum
     // pegaria 403 se a gente chamasse isso pra todo mundo.
     if (user.ehGerente) chamadas.push(api.compradores.listar().then(setCompradoresState));
     await Promise.all(chamadas);
     setView("compras");
+  }
+  // Só o gerente de compras chama isso (checado de novo no backend) — ver
+  // CompradoresSection/toggle "Gerente comercial pode editar custo".
+  async function atualizarConfig(patch) {
+    const atualizado = await api.configuracoes.atualizar({ ...config, ...patch });
+    setConfigState(atualizado);
   }
 
   // Fogo-e-esquece: não bloqueia a navegação do visitante nem precisa atualizar
@@ -468,6 +481,7 @@ export default function App() {
           envios={envios} buscas={buscas} saving={saving} onLogout={logout}
           onSimular={(catId, consId) => abrirSimulacao(catId, consId, "gerente")}
           onSincronizar={sincronizar} sincronizando={sincronizando}
+          podeAlterarCusto={config.gerenteComercialPodeCusto}
         />
       )}
 
@@ -475,7 +489,8 @@ export default function App() {
         <ComprasPanel produtos={produtos} setProdutos={setProdutos}
           onRenomearCampoProduto={renomearCampoProduto} onExcluirCampoProduto={excluirCampoProduto}
           compradores={compradores} setCompradores={setCompradores}
-          saving={saving} onLogout={logout} comprador={currentUser} />
+          saving={saving} onLogout={logout} comprador={currentUser}
+          config={config} onAtualizarConfig={atualizarConfig} />
       )}
 
       {view === "consultor" && currentUser?.role === "consultor" && (
@@ -672,7 +687,7 @@ function LoginScreen({ onGerenteLogin, onConsultorLogin, onComprasLogin }) {
 // ---------------------------------------------------------------------------
 // Gerente — PAINEL / CONSULTORES / RASTREAMENTO
 // ---------------------------------------------------------------------------
-function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, removerSecao, onAtualizarCuradoriaProduto, onRenomearCampoProduto, onExcluirCampoProduto, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando }) {
+function GerentePanel({ produtos, setProdutos, consultores, setConsultores, catalogos, setCatalogos, secoes, atualizarSecao, criarSecao, removerSecao, onAtualizarCuradoriaProduto, onRenomearCampoProduto, onExcluirCampoProduto, envios, buscas, saving, onLogout, onSimular, onSincronizar, sincronizando, podeAlterarCusto }) {
   const [tab, setTab] = useState("painel");
   const tabs = [
     { id: "painel", label: "Painel" },
@@ -722,9 +737,10 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
             <CatalogosSection produtos={produtos} consultores={consultores} catalogos={catalogos}
               setCatalogos={setCatalogos} secoes={secoes} onAtualizarCuradoriaProduto={onAtualizarCuradoriaProduto} onSimular={onSimular} />
             {/* Compras é quem cuida de produto no dia a dia, mas o setor é novo na empresa — o
-                gerente comercial cadastra/edita como reforço enquanto isso não muda. Custo/margem
-                também liberados pra ele por decisão de negócio (ver server/routes/produtos.js). */}
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos}
+                gerente comercial cadastra/edita como reforço enquanto isso não muda. Custo/margem:
+                liberado ou não pro gerente comercial por decisão do gerente de compras (flag
+                global "gerente_comercial_pode_custo", ver server/routes/configuracoes.js). */}
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} podeAlterarCusto={podeAlterarCusto}
               onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
           </div>
         </>
@@ -765,7 +781,7 @@ function GerentePanel({ produtos, setProdutos, consultores, setConsultores, cata
 // server/routes/compradores.js) ganha a aba "Equipe" pra cadastrar o resto do setor —
 // o gerente comercial não participa disso de jeito nenhum.
 // ---------------------------------------------------------------------------
-function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluirCampoProduto, compradores, setCompradores, saving, onLogout, comprador }) {
+function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluirCampoProduto, compradores, setCompradores, saving, onLogout, comprador, config, onAtualizarConfig }) {
   const [tab, setTab] = useState("painel");
   const tabs = [{ id: "painel", label: "Painel" }];
   if (comprador.ehGerente) tabs.push({ id: "equipe", label: "Equipe" }, { id: "historico", label: "Histórico" });
@@ -783,7 +799,9 @@ function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluir
           ]} />
           <div className="max-w-6xl mx-auto px-6 py-8">
             {saving && <div className="text-[11px] text-stone-400 mb-4">Salvando…</div>}
-            <ProdutosSection produtos={produtos} setProdutos={setProdutos} podeAlterarCusto={comprador.ehGerente}
+            {/* eh_gerente sempre pode; senão, depende do que o gerente de compras concedeu
+                individualmente pra essa pessoa (aba Equipe, ver CompradoresSection). */}
+            <ProdutosSection produtos={produtos} setProdutos={setProdutos} podeAlterarCusto={comprador.ehGerente || comprador.podeEditarCusto}
               mostrarPrecoTabelado onRenomearCampo={onRenomearCampoProduto} onExcluirCampo={onExcluirCampoProduto} />
           </div>
         </>
@@ -794,7 +812,8 @@ function ComprasPanel({ produtos, setProdutos, onRenomearCampoProduto, onExcluir
           <Hero title="Equipe de Compras" stats={[{ label: "Cadastrados", value: compradores.length }]} />
           <div className="max-w-6xl mx-auto px-6 py-8">
             {saving && <div className="text-[11px] text-stone-400 mb-4">Salvando…</div>}
-            <CompradoresSection compradores={compradores} setCompradores={setCompradores} />
+            <CompradoresSection compradores={compradores} setCompradores={setCompradores}
+              config={config} onAtualizarConfig={onAtualizarConfig} />
           </div>
         </>
       )}
@@ -1569,7 +1588,7 @@ function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem
   const blank = { nome: "", gramatura: "", categoria: "", descricao: "", emoji: "📦", imagem: "", ativo: true,
     marca: "", sabores: [], custo: "", badges: [],
     precos: { primeira: { de: "", desconto: "", parcelado: "", vista: "" }, farm: { de: "", desconto: "", parcelado: "", vista: "" },
-      tabelado: { de: "", por: "" } },
+      tabelado: { de: "", por: "" }, tabeladoPrimeiraCompra: { de: "", desconto: "", parcelado: "", vista: "" } },
     variacoes: {} }; // preço/custo por sabor, opcional — ver ProdutoForm
 
   const filtro = useFiltroProdutos(produtos);
@@ -1920,8 +1939,10 @@ function BlocoPrecoTabelado({ sp, descricao, onDe, onPor }) {
   );
 }
 
-// podeAlterarCusto=false (comprador comum, sem eh_gerente) desabilita o campo de custo — só o
-// gerente de compras mexe nesse número (ver server/routes/produtos.js pro mesmo bloqueio na API).
+// podeAlterarCusto=false desabilita o campo de custo — quem decide esse valor é o chamador
+// (ComprasPanel/GerentePanel, ver server/routes/produtos.js pro mesmo bloqueio na API):
+// eh_gerente sempre pode; comprador comum depende de pode_editar_custo (concedido individualmente
+// na aba Equipe); gerente comercial depende do flag global gerente_comercial_pode_custo.
 // Seção curada não aparece aqui de propósito — é curadoria de catálogo (ver CatalogosSection),
 // não cadastro de compra. O form só preserva f.badges como veio, pra não apagar o que o
 // gerente já tiver marcado ao salvar o resto do produto.
@@ -1972,6 +1993,9 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
   // Preço Tabelado: só usado hoje pelo setor de Compras, pra produtos que ainda não entraram
   // em catálogo/promoção (ver futura página de todos os produtos pro cliente). Diferente dos
   // setores acima, não tem % de desconto — só De e Por, cada um digitado direto, sem sync entre eles.
+  // "tabeladoPrimeiraCompra" (bloco abaixo, via setPrecoDe/setPrecoDesconto/setPrecoPor com
+  // setor="tabeladoPrimeiraCompra") é a variante desse mesmo preço só pra 1ª compra do cliente —
+  // reaproveita o sync De/Desconto/Por dos setores normais (BlocoPrecoSetor), não este aqui.
   function setPrecoTabelado(sabor, campo, valorStr) {
     setF((cur) => {
       if (!sabor) return { ...cur, precos: { ...cur.precos, tabelado: { ...(cur.precos.tabelado || {}), [campo]: valorStr } } };
@@ -2063,6 +2087,7 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
       if (algumPrecoPreenchido(v.precos?.tabelado)) {
         precos.tabelado = { de: Number(v.precos.tabelado.de) || 0, por: Number(v.precos.tabelado.por) || 0 };
       }
+      if (algumPrecoPreenchido(v.precos?.tabeladoPrimeiraCompra)) precos.tabeladoPrimeiraCompra = montarPreco(v.precos.tabeladoPrimeiraCompra);
       if (!custoPreenchido && Object.keys(precos).length === 0) continue; // nada customizado — cai no preço geral
       out[sabor] = { ...(custoPreenchido ? { custo: Number(v.custo) || 0 } : {}), precos };
     }
@@ -2077,6 +2102,9 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
       // abaixo): f.precos.tabelado só muda via setPrecoTabelado, que só dispara com o campo visível —
       // então quem não vê o campo simplesmente reenvia o valor que já estava salvo, sem risco de zerar.
       tabelado: { de: Number(f.precos.tabelado?.de) || 0, por: Number(f.precos.tabelado?.por) || 0 },
+      // Idem tabelado acima: mesma proteção contra zerar quando não tem UI pra editar. "|| {}" cobre
+      // produto antigo, salvo antes deste campo existir (f.precos.tabeladoPrimeiraCompra vem undefined).
+      tabeladoPrimeiraCompra: montarPreco(f.precos.tabeladoPrimeiraCompra || {}),
     }, variacoes: montarVariacoes() }); }}
       className="bg-white border border-stone-200 rounded-xl p-4 mb-4 space-y-3">
       <div className="grid sm:grid-cols-4 gap-3">
@@ -2127,16 +2155,27 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
           <input type="number" step="0.01" value={f.custo ?? ""} disabled={!podeAlterarCusto}
             onChange={(e) => setF({ ...f, custo: e.target.value })}
             className={`w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono ${!podeAlterarCusto ? "bg-stone-100 text-stone-400 cursor-not-allowed" : ""}`}
-            title={podeAlterarCusto ? "Custo do produto, usado pra calcular a margem" : "Somente o gerente de compras pode alterar o custo do produto."} />
+            title={podeAlterarCusto ? "Custo do produto, usado pra calcular a margem" : "Você não tem permissão para alterar o custo do produto."} />
           {!podeAlterarCusto && (
-            <p className="text-[11px] text-amber-600 mt-1">Somente o gerente de compras pode alterar o custo.</p>
+            <p className="text-[11px] text-amber-600 mt-1">Você não tem permissão para alterar o custo.</p>
           )}
         </div>
       </div>
       {mostrarPrecoTabelado && (
         <BlocoPrecoTabelado sp={f.precos.tabelado || { de: "", por: "" }}
-          descricao="Preço de produtos fora de catálogo/promoção — usado na futura página com todos os produtos da empresa."
+          descricao="Preço de produtos fora de catálogo/promoção usado na futura página com todos os produtos da empresa."
           onDe={(v) => setPrecoTabelado(null, "de", v)} onPor={(v) => setPrecoTabelado(null, "por", v)} />
+      )}
+      {/* Variante do Preço Tabelado exclusiva pra 1ª compra do cliente com a HP Distribuidora —
+          estratégia comercial pra converter quem nunca comprou. Reaproveita o mesmo bloco De/
+          Desconto/Por com sync automático dos setores normais (BlocoPrecoSetor), só que como um
+          preço isolado, exclusivo do setor de Compras (mesma visibilidade de mostrarPrecoTabelado). */}
+      {mostrarPrecoTabelado && (
+        <BlocoPrecoSetor titulo="Preço Tabelado — 1ª Compra"
+          sp={f.precos.tabeladoPrimeiraCompra || { de: "", desconto: "", parcelado: "" }} custo={f.custo}
+          onDe={(v) => setPrecoDe(null, "tabeladoPrimeiraCompra", v)}
+          onPor={(v) => setPrecoPor(null, "tabeladoPrimeiraCompra", v)}
+          onDesconto={(v) => setPrecoDesconto(null, "tabeladoPrimeiraCompra", v)} />
       )}
       <div>
         <label className="text-[11px] text-stone-400 block mb-1.5">
@@ -2189,11 +2228,19 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
                 onChange={(e) => setCustoVariacao(saborExpandido, e.target.value)}
                 placeholder={`Padrão do produto: ${formatBRL(f.custo)}`}
                 className={`w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono ${!podeAlterarCusto ? "bg-stone-100 text-stone-400 cursor-not-allowed" : ""}`}
-                title={podeAlterarCusto ? "Custo deste sabor, usado pra calcular a margem dele" : "Somente o gerente de compras pode alterar o custo do produto."} />
+                title={podeAlterarCusto ? "Custo deste sabor, usado pra calcular a margem dele" : "Você não tem permissão para alterar o custo do produto."} />
             </div>
             {mostrarPrecoTabelado && (
               <BlocoPrecoTabelado sp={f.variacoes?.[saborExpandido]?.precos?.tabelado || { de: "", por: "" }}
                 onDe={(v) => setPrecoTabelado(saborExpandido, "de", v)} onPor={(v) => setPrecoTabelado(saborExpandido, "por", v)} />
+            )}
+            {mostrarPrecoTabelado && (
+              <BlocoPrecoSetor titulo="Preço Tabelado — 1ª Compra"
+                sp={f.variacoes?.[saborExpandido]?.precos?.tabeladoPrimeiraCompra || { de: "", desconto: "", parcelado: "" }}
+                custo={f.variacoes?.[saborExpandido]?.custo || f.custo}
+                onDe={(v) => setPrecoDe(saborExpandido, "tabeladoPrimeiraCompra", v)}
+                onPor={(v) => setPrecoPor(saborExpandido, "tabeladoPrimeiraCompra", v)}
+                onDesconto={(v) => setPrecoDesconto(saborExpandido, "tabeladoPrimeiraCompra", v)} />
             )}
             <div className="grid sm:grid-cols-2 gap-3">
               {["primeira", "farm"].map((setor) => (
@@ -2305,9 +2352,9 @@ function ConsultoresSection({ consultores, setConsultores, catalogos, envios }) 
 // --- Compradores (contas de quem loga como "compras" — cadastra/edita produto e custo).
 // Aba "Equipe" dentro do ComprasPanel, visível só pra quem tem ehGerente=true — o gerente
 // comercial não gerencia (nem enxerga) essas contas. ---
-function CompradoresSection({ compradores, setCompradores }) {
+function CompradoresSection({ compradores, setCompradores, config, onAtualizarConfig }) {
   const [editing, setEditing] = useState(null);
-  const blank = { nome: "", email: "", senha: "1234", ehGerente: false };
+  const blank = { nome: "", email: "", senha: "1234", ehGerente: false, podeEditarCusto: false };
 
   function salvar(c) {
     // Edição sem preencher senha = mantém a senha atual (o backend nunca devolve a senha salva).
@@ -2320,6 +2367,21 @@ function CompradoresSection({ compradores, setCompradores }) {
 
   return (
     <div>
+      {/* Flag global (não é por-pessoa como abaixo): o gerente comercial faz login único, sem
+          conta individual (ver server/routes/auth.js), então não dá pra conceder isso a um
+          gerente comercial específico — é ligar/desligar pra TODO gerente comercial de uma vez. */}
+      <div className="bg-white border border-stone-200 rounded-xl p-4 mb-4 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold text-stone-700">Gerente comercial pode editar custo</div>
+          <p className="text-[11px] text-stone-400 mt-0.5">Vale pra qualquer login de Gerente comercial — não tem conta individual pra decidir pessoa a pessoa.</p>
+        </div>
+        <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer">
+          <input type="checkbox" checked={!!config?.gerenteComercialPodeCusto}
+            onChange={(e) => onAtualizarConfig({ gerenteComercialPodeCusto: e.target.checked })} />
+          <span className="text-xs font-bold text-stone-600">{config?.gerenteComercialPodeCusto ? "Sim" : "Não"}</span>
+        </label>
+      </div>
+
       <div className="flex justify-end mb-3">
         <button onClick={() => setEditing(blank)}
           className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
@@ -2329,7 +2391,7 @@ function CompradoresSection({ compradores, setCompradores }) {
 
       {editing && (
         <form onSubmit={(e) => { e.preventDefault(); salvar(editing); }}
-          className="bg-white border border-stone-200 rounded-xl p-4 mb-4 grid sm:grid-cols-5 gap-3 items-end">
+          className="bg-white border border-stone-200 rounded-xl p-4 mb-4 grid sm:grid-cols-6 gap-3 items-end">
           <input required placeholder="Nome" value={editing.nome} onChange={(e) => setEditing({ ...editing, nome: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           <input required type="email" placeholder="E-mail" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} className="border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           <input placeholder={editing.id ? "Nova senha (deixe em branco p/ manter)" : "Senha"} value={editing.senha || ""}
@@ -2338,7 +2400,15 @@ function CompradoresSection({ compradores, setCompradores }) {
             <input type="checkbox" checked={!!editing.ehGerente} onChange={(e) => setEditing({ ...editing, ehGerente: e.target.checked })} />
             Gerente de compras
           </label>
-          <div className="sm:col-span-5 flex gap-2">
+          {/* Gerente de compras sempre pode editar custo (ver calcularCusto no backend) —
+              esse checkbox fica travado marcado nesse caso pra não sugerir que dá pra tirar. */}
+          <label className={`flex items-center gap-2 text-xs px-1 ${editing.ehGerente ? "text-stone-400" : "text-stone-600"}`}
+            title="Concede a ESSA pessoa (mesmo não sendo gerente de compras) permissão pra editar o custo dos produtos">
+            <input type="checkbox" checked={editing.ehGerente || !!editing.podeEditarCusto} disabled={editing.ehGerente}
+              onChange={(e) => setEditing({ ...editing, podeEditarCusto: e.target.checked })} />
+            Pode editar custo
+          </label>
+          <div className="sm:col-span-6 flex gap-2">
             <button type="submit" className="bg-neutral-950 text-white text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar</button>
             <button type="button" onClick={() => setEditing(null)} className="text-stone-500 text-sm px-4 py-2">Cancelar</button>
           </div>
@@ -2352,6 +2422,7 @@ function CompradoresSection({ compradores, setCompradores }) {
               <th className="text-left px-4 py-2.5 font-bold">Comprador(a)</th>
               <th className="text-left px-4 py-2.5 font-bold">E-mail</th>
               <th className="text-left px-4 py-2.5 font-bold">Papel</th>
+              <th className="text-center px-4 py-2.5 font-bold">Edita custo</th>
               <th className="px-4 py-2.5"></th>
             </tr>
           </thead>
@@ -2365,6 +2436,11 @@ function CompradoresSection({ compradores, setCompradores }) {
                     ? <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700">Gerente de compras</span>
                     : <span className="text-stone-400 text-xs">Comprador(a)</span>}
                 </td>
+                <td className="px-4 py-2.5 text-center">
+                  {c.ehGerente || c.podeEditarCusto
+                    ? <span className="text-[11px] font-bold text-emerald-700">Sim</span>
+                    : <span className="text-[11px] text-stone-400">Não</span>}
+                </td>
                 <td className="px-4 py-2.5">
                   <div className="flex justify-end gap-1">
                     <button onClick={() => setEditing(c)} className="p-1.5 text-stone-400 hover:text-stone-700"><Pencil size={14} /></button>
@@ -2373,7 +2449,7 @@ function CompradoresSection({ compradores, setCompradores }) {
                 </td>
               </tr>
             ))}
-            {compradores.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum comprador(a) cadastrado.</td></tr>}
+            {compradores.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-stone-400 text-sm">Nenhum comprador(a) cadastrado.</td></tr>}
           </tbody>
         </table>
       </div>
