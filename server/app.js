@@ -10,6 +10,7 @@ const catalogosRoutes = require("./routes/catalogos.js");
 const enviosRoutes = require("./routes/envios.js");
 const secoesRoutes = require("./routes/secoes.js");
 const buscasRoutes = require("./routes/buscas.js");
+const configuracoesRoutes = require("./routes/configuracoes.js");
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/catalogos", catalogosRoutes);
 app.use("/api/envios", enviosRoutes);
 app.use("/api/secoes", secoesRoutes);
 app.use("/api/buscas", buscasRoutes);
+app.use("/api/configuracoes", configuracoesRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);

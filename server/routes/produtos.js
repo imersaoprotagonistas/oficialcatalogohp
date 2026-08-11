@@ -38,7 +38,7 @@ function toRow(p, incluirCusto) {
     marca: p.marca,
     sabores: p.sabores || [], // array de sabores disponíveis, ex: ["Chocolate","Baunilha"]
     badges: p.badges,
-    precos: p.precos, // { primeira: {...}, farm: {...}, tabelado: { de, por } } — tabelado só tem UI no Compras (src/App.jsx)
+    precos: p.precos, // { primeira: {...}, farm: {...}, tabelado: { de, por }, tabeladoPrimeiraCompra: {...} } — os dois "tabelado*" só têm UI no Compras (src/App.jsx)
     variacoes: montarVariacoesResposta(p.variacoes, incluirCusto),
   };
   if (incluirCusto) row.custo = p.custo === null ? 0 : Number(p.custo);
@@ -74,36 +74,53 @@ router.get("/:id/imagem", ah(async (req, res) => {
   res.send(Buffer.from(m[2], "base64"));
 }));
 
+// Quem pode alterar custo agora: gerente de compras (eh_gerente) e comprador com
+// pode_editar_custo=true concedido individualmente sempre podem (carimbado no token no login,
+// ver server/routes/auth.js). Gerente comercial depende do flag global configuracoes.
+// gerente_comercial_pode_custo, que o gerente de compras liga/desliga pra TODO gerente
+// comercial de uma vez (não tem conta individual pra um flag por-pessoa — ver
+// server/routes/configuracoes.js). Sempre lido fresco do banco (não vai no token do gerente,
+// que é login único sem id), então uma mudança nesse flag já vale na próxima requisição, sem
+// precisar logar de novo — diferente do pode_editar_custo do comprador, que só atualiza no
+// próximo login (é carimbado no token).
+async function podeAlterarCustoAgora(req) {
+  if (req.user.role === "compras") return !!(req.user.ehGerente || req.user.podeEditarCusto);
+  if (req.user.role === "gerente") {
+    const { rows } = await pool.query("select gerente_comercial_pode_custo from configuracoes where id = 'global'");
+    return rows[0]?.gerente_comercial_pode_custo ?? true;
+  }
+  return false;
+}
+
 // Cadastro/edição de produto: Compras é quem cuida disso no dia a dia, mas o setor é novo na
 // empresa e ainda está aprendendo — o gerente comercial cadastra/edita como reforço enquanto
-// isso não muda. Custo: só quem tem "livre acesso" (gerente comercial e gerente de compras)
-// pode alterar; um comprador comum só é barrado se tentar mudar o valor que já via.
-function calcularCusto(req, custoAtual) {
+// isso não muda. Custo: só quem tem permissão (ver podeAlterarCustoAgora) pode alterar; quem não
+// tem só é barrado se tentar mudar o valor que já via.
+async function calcularCusto(req, custoAtual) {
   const b = req.body || {};
-  if (req.user.role === "gerente" || req.user.ehGerente) return { custo: Number(b.custo) || 0, erro: null };
-  // comprador comum: só passa se não estiver tentando mudar o valor que já via.
+  if (await podeAlterarCustoAgora(req)) return { custo: Number(b.custo) || 0, erro: null };
+  // sem permissão: só passa se não estiver tentando mudar o valor que já via.
   const tentativa = Number(b.custo) || 0;
   if (tentativa !== custoAtual) {
-    return { custo: null, erro: "Somente o gerente de compras pode alterar o custo do produto." };
+    return { custo: null, erro: "Você não tem permissão para alterar o custo do produto." };
   }
   return { custo: tentativa, erro: null };
 }
 
-// Mesma regra do custo geral acima, só que por sabor: comprador comum só passa se não mexer no
-// custo que já via pra aquele sabor específico; quem tem livre acesso (gerente comercial e
-// gerente de compras) pode alterar à vontade. "precos" de cada sabor (usado no catálogo/carrinho
-// do cliente, ver src/App.jsx) não tem essa restrição — só o custo é dado sensível.
-// variacoesAtuais vem do produto já salvo (ou {} num produto novo); variacoesRecebidas vem do
-// corpo da requisição. Sabor que não veio no corpo simplesmente não entra no resultado — é assim
-// que remover a variação de um sabor funciona (o form só manda o que ainda existe).
-function calcularVariacoes(req, variacoesRecebidas, variacoesAtuais) {
-  const podeAlterarCusto = req.user.role === "gerente" || req.user.ehGerente;
+// Mesma regra do custo geral acima, só que por sabor: quem não tem permissão só passa se não
+// mexer no custo que já via pra aquele sabor específico. "precos" de cada sabor (usado no
+// catálogo/carrinho do cliente, ver src/App.jsx) não tem essa restrição — só o custo é dado
+// sensível. variacoesAtuais vem do produto já salvo (ou {} num produto novo); variacoesRecebidas
+// vem do corpo da requisição. Sabor que não veio no corpo simplesmente não entra no resultado —
+// é assim que remover a variação de um sabor funciona (o form só manda o que ainda existe).
+async function calcularVariacoes(req, variacoesRecebidas, variacoesAtuais) {
+  const podeAlterarCusto = await podeAlterarCustoAgora(req);
   const resultado = {};
   for (const [sabor, v] of Object.entries(variacoesRecebidas || {})) {
     const custoAtual = Number(variacoesAtuais?.[sabor]?.custo) || 0;
     const custoTentativa = Number(v?.custo) || 0;
     if (!podeAlterarCusto && custoTentativa !== custoAtual) {
-      return { variacoes: null, erro: `Somente o gerente de compras pode alterar o custo do sabor "${sabor}".` };
+      return { variacoes: null, erro: `Você não tem permissão para alterar o custo do sabor "${sabor}".` };
     }
     resultado[sabor] = { custo: podeAlterarCusto ? custoTentativa : custoAtual, precos: v?.precos || {} };
   }
@@ -161,9 +178,9 @@ function resumoEdicao(antes, depois) {
 
 router.post("/", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
   const b = req.body || {};
-  const { custo, erro } = calcularCusto(req, 0);
+  const { custo, erro } = await calcularCusto(req, 0);
   if (erro) return res.status(403).json({ erro });
-  const { variacoes, erro: erroVariacoes } = calcularVariacoes(req, b.variacoes, {});
+  const { variacoes, erro: erroVariacoes } = await calcularVariacoes(req, b.variacoes, {});
   if (erroVariacoes) return res.status(403).json({ erro: erroVariacoes });
   const marca = await canonizarValor("marca", b.marca);
   const categoria = await canonizarValor("categoria", b.categoria);
@@ -182,9 +199,9 @@ router.put("/:id", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
   const b = req.body || {};
   const { rows: atual } = await pool.query("select * from produtos where id=$1", [req.params.id]);
   if (!atual[0]) return res.status(404).json({ erro: "Produto não encontrado." });
-  const { custo, erro } = calcularCusto(req, Number(atual[0].custo) || 0);
+  const { custo, erro } = await calcularCusto(req, Number(atual[0].custo) || 0);
   if (erro) return res.status(403).json({ erro });
-  const { variacoes, erro: erroVariacoes } = calcularVariacoes(req, b.variacoes, atual[0].variacoes);
+  const { variacoes, erro: erroVariacoes } = await calcularVariacoes(req, b.variacoes, atual[0].variacoes);
   if (erroVariacoes) return res.status(403).json({ erro: erroVariacoes });
   const marca = await canonizarValor("marca", b.marca);
   const categoria = await canonizarValor("categoria", b.categoria);

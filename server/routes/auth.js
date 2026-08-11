@@ -35,13 +35,15 @@ router.post("/login", limiteLogin, ah(async (req, res) => {
     const comprador = rows[0];
     const ok = comprador && (await verificarSenha(senha, comprador.senha_hash));
     if (!ok) return res.status(401).json({ erro: "Comprador(a) ou senha incorretos." });
-    // ehGerente e nome vão no token (não só na resposta) porque server/routes/compradores.js e
-    // server/routes/produtos.js (histórico de quem criou/editou produto) usam isso direto do
-    // token — sem depender do cliente mandar de volta.
-    const { senha_hash, eh_gerente, ...semSenha } = comprador;
+    // ehGerente, podeEditarCusto e nome vão no token (não só na resposta) porque
+    // server/routes/compradores.js e server/routes/produtos.js (histórico e permissão de
+    // custo) usam isso direto do token — sem depender do cliente mandar de volta. Como fica
+    // carimbado no login, uma mudança de permissão só vale a partir do próximo login dessa
+    // pessoa (mesma limitação que ehGerente já tinha).
+    const { senha_hash, eh_gerente, pode_editar_custo, ...semSenha } = comprador;
     return res.json({
-      token: gerarToken({ role: "compras", id: comprador.id, ehGerente: eh_gerente, nome: comprador.nome }),
-      user: { role: "compras", ehGerente: eh_gerente, ...semSenha },
+      token: gerarToken({ role: "compras", id: comprador.id, ehGerente: eh_gerente, podeEditarCusto: pode_editar_custo, nome: comprador.nome }),
+      user: { role: "compras", ehGerente: eh_gerente, podeEditarCusto: pode_editar_custo, ...semSenha },
     });
   }
 
