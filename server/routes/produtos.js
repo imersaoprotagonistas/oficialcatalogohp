@@ -205,11 +205,12 @@ router.put("/:id", requireAuth(["compras", "gerente"]), ah(async (req, res) => {
   if (erroVariacoes) return res.status(403).json({ erro: erroVariacoes });
   const marca = await canonizarValor("marca", b.marca);
   const categoria = await canonizarValor("categoria", b.categoria);
-  // imagem usa coalesce(nullif(...)): se o campo não vier (undefined -> null aqui) preserva a
-  // foto atual em vez de apagá-la — mesma proteção que capa já tem em server/routes/catalogos.js.
+  // imagem usa coalesce(nullif(...)): se o campo não vier (undefined -> null aqui) ou vier vazio
+  // (ex.: formulário salvo antes da foto atual terminar de carregar no front) preserva a foto
+  // atual em vez de apagá-la — mesma proteção que capa tem em server/routes/catalogos.js.
   const { rows } = await pool.query(
     `update produtos set nome=$1, gramatura=$2, categoria=$3, descricao=$4, emoji=$5,
-       imagem=coalesce($6, imagem), ativo=$7,
+       imagem=coalesce(nullif($6, ''), imagem), ativo=$7,
        marca=$8, sabores=$9, custo=$10, badges=$11, precos=$12, variacoes=$13
      where id=$14 returning *`,
     [b.nome, b.gramatura, categoria, b.descricao, b.emoji, b.imagem ?? null, b.ativo ?? true, marca,
