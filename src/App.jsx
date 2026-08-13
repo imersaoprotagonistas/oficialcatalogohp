@@ -954,6 +954,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
   const [copiado, setCopiado] = useState(null);
   const formRef = useRef(null);
   const capaRequestRef = useRef(0); // descarta a busca da capa se o usuário trocar de catálogo antes dela terminar
+  const [carregandoCapa, setCarregandoCapa] = useState(false); // true entre clicar "Editar" e a capa real chegar
 
   useEffect(() => {
     if (criando) formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -966,6 +967,7 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
     setDataInicio(hojeISO()); setDataFim(""); setSomenteSelecionados(false); setProdutoExpandido(null);
     setEditandoId(null); setCriando(true);
     capaRequestRef.current += 1; // invalida qualquer busca de capa de uma edição anterior ainda em andamento
+    setCarregandoCapa(false);
   }
   async function iniciarEdicao(cat) {
     const itensPorId = Object.fromEntries(cat.itens.map((it) => [it.produtoId, it]));
@@ -982,18 +984,23 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
         ? { on: true, de: item.precoDe ?? 0, vista: item.precoVista, parcelado: item.precoParcelado, porSabor }
         : { on: false, de: p.precos?.[cat.setor]?.de ?? 0, vista: p.precos?.[cat.setor]?.vista ?? 0, parcelado: p.precos?.[cat.setor]?.parcelado ?? 0, porSabor };
     });
+    // Só monta o formulário (criando=true) quando a capa real já chegou — abrir antes com capa
+    // vazia deixa uma janela em que "Salvar" manda capa="" por cima da capa que já existia (mesmo
+    // problema do ProdutoForm, ver CadastroSection.editar). Enquanto carrega, fecha qualquer
+    // formulário aberto e mostra o indicador de carregamento abaixo.
+    const requestId = ++capaRequestRef.current;
+    setCriando(false);
+    setCarregandoCapa(true);
+    const novaCapa = cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "";
+    // Se o usuário já trocou de catálogo (ou cancelou) antes da busca terminar, descarta o
+    // resultado pra não abrir o formulário errado por cima da seleção atual.
+    if (capaRequestRef.current !== requestId) return;
+    setCarregandoCapa(false);
     setSelecionados(base); setSomenteSelecionados(false); setProdutoExpandido(null);
     setNome(cat.nome); setSetor(cat.setor); setSubtitulo(cat.subtitulo || ""); setCorDestaque(cat.corDestaque || CATALOGO_COR_PADRAO);
     setDataInicio(cat.dataInicio || hojeISO()); setDataFim(cat.dataFim || "");
-    // Limpa a capa antiga já — sem isso, o formulário abre mostrando a capa que sobrou do
-    // catálogo editado por último até a busca abaixo terminar (podia ser de outro catálogo).
-    setCapa("");
+    setCapa(novaCapa);
     setEditandoId(cat.id); setCriando(true);
-    const requestId = ++capaRequestRef.current;
-    const novaCapa = cat.temCapa ? await urlParaDataUrl(api.catalogos.capaUrl(cat.id)) : "";
-    // Se o usuário já trocou de catálogo (ou cancelou e abriu outro) antes da busca terminar,
-    // descarta o resultado pra não aplicar a capa errada por cima da seleção atual.
-    if (capaRequestRef.current === requestId) setCapa(novaCapa);
   }
   function trocarSetor(novoSetor) {
     setSetor(novoSetor);
@@ -1092,6 +1099,12 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
           </button>
         )}
       </div>
+
+      {carregandoCapa && (
+        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-5 text-xs text-stone-400">
+          Carregando catálogo…
+        </div>
+      )}
 
       {criando && (
         <div ref={formRef} className="bg-white border border-stone-200 rounded-xl p-4 mb-5 space-y-4">

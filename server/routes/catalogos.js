@@ -75,10 +75,12 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
 
 router.put("/:id", requireAuth(["gerente"]), ah(async (req, res) => {
   const b = req.body || {};
+  // capa usa coalesce(nullif(...)): string vazia (ex.: formulário salvo antes da capa atual
+  // terminar de carregar no front) não pode apagar uma capa já salva, só uma data URL de verdade.
   const { rows } = await pool.query(
     `update catalogos set
        nome=coalesce($1, nome), setor=coalesce($2, setor), itens=coalesce($3, itens),
-       status=coalesce($4, status), capa=coalesce($5, capa), subtitulo=coalesce($6, subtitulo),
+       status=coalesce($4, status), capa=coalesce(nullif($5, ''), capa), subtitulo=coalesce($6, subtitulo),
        cor_destaque=coalesce($7, cor_destaque), data_inicio=coalesce($8, data_inicio), data_fim=coalesce($9, data_fim)
      where id=$10 returning *`,
     [b.nome, b.setor, b.itens ? JSON.stringify(b.itens) : null, b.status, b.capa, b.subtitulo, b.corDestaque,

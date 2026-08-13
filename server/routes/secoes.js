@@ -47,12 +47,15 @@ router.post("/", requireAuth(["gerente"]), ah(async (req, res) => {
   if (!titulo) return res.status(400).json({ erro: "Título é obrigatório." });
 
   const id = `${setor}_${chave}`;
+  // "default" só é palavra reservada numa posição da lista VALUES, não dá pra usar como
+  // argumento de coalesce(...) — isso gerava erro de sintaxe no Postgres em toda criação de
+  // seção. Repete aqui o mesmo default do schema.sql (cor) já que precisa vir como parâmetro.
   const { rows } = await pool.query(
     `insert into secoes_curadas (id, setor, chave, titulo, descricao, ativo, ordem, cor)
-     values ($1,$2,$3,$4,$5,$6,$7,coalesce($8, default))
+     values ($1,$2,$3,$4,$5,$6,$7,$8)
      on conflict (id) do nothing
      returning *`,
-    [id, setor, chave, titulo, b.descricao || null, b.ativo ?? true, b.ordem ?? 0, b.cor || null]
+    [id, setor, chave, titulo, b.descricao || null, b.ativo ?? true, b.ordem ?? 0, b.cor || "#78716c"]
   );
   if (!rows[0]) return res.status(409).json({ erro: "Já existe uma seção com essa chave nesse setor." });
   res.status(201).json(toRow(rows[0]));
