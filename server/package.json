@@ -8,7 +8,9 @@
     "seed": "node seed.js",
     "hash-senha": "node hash-senha.js",
     "bootstrap-comprador": "node bootstrap-comprador.js",
-    "version-check": "node version-check.js"
+    "version-check": "node version-check.js",
+    "uppercase-marcas-categorias": "node uppercase-marcas-categorias.js",
+    "titlecase-sabores": "node titlecase-sabores.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
