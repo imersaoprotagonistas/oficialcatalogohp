@@ -163,23 +163,19 @@ create table if not exists buscas_sem_resultado (
 );
 create index if not exists buscas_sem_resultado_catalogo_id_idx on buscas_sem_resultado(catalogo_id);
 
--- Se você já tinha rodado este arquivo antes (tabela produtos já existe sem as colunas
--- abaixo), rode só as linhas que faltarem:
--- alter table produtos add column if not exists sabor text;
--- alter table produtos add column if not exists custo numeric;
--- alter table produtos add column if not exists sabores jsonb not null default '[]';
--- alter table catalogos add column if not exists data_inicio date;
--- alter table catalogos add column if not exists data_fim date;
--- alter table produtos add column if not exists variacoes jsonb not null default '{}';
--- alter table compradores add column if not exists pode_editar_custo boolean not null default false;
--- create table if not exists configuracoes (
---   id                            text primary key default 'global',
---   gerente_comercial_pode_custo  boolean not null default true
--- );
--- insert into configuracoes (id) values ('global') on conflict (id) do nothing;
-
--- O backend só acessa o banco pela role dona das tabelas (bypassa RLS por padrão), então
--- ligar RLS aqui não muda nada pro app — só impede que a API pública do Supabase
--- (PostgREST, alcançável com a chave anon) leia/escreva essas tabelas sem passar pelo Express.
+-- Todas as tabelas do app têm RLS ligado, sem exceção — o backend acessa o banco pela role
+-- dona das tabelas (bypassa RLS por padrão), então isso não muda nada pro app; só impede que a
+-- API pública do Supabase (PostgREST, alcançável com a chave anon) leia/escreva essas tabelas
+-- sem passar pelo Express. Alertado pelo linter de segurança do Supabase em 2026-08 depois de
+-- faltar em produtos_historico (as outras já estavam certas no banco, só não documentadas aqui).
+alter table produtos enable row level security;
+alter table marcas enable row level security;
+alter table categorias enable row level security;
+alter table produtos_historico enable row level security;
+alter table consultores enable row level security;
+alter table compradores enable row level security;
+alter table configuracoes enable row level security;
+alter table catalogos enable row level security;
+alter table envios enable row level security;
 alter table secoes_curadas enable row level security;
 alter table buscas_sem_resultado enable row level security;
