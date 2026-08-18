@@ -2,12 +2,18 @@ const { Router } = require("express");
 const { randomUUID } = require("crypto");
 const { pool } = require("../db.js");
 const { requireAuth } = require("../middleware/requireAuth.js");
+const { rateLimit } = require("../middleware/rateLimit.js");
 const { ah } = require("../asyncHandler.js");
 
 const router = Router();
 
+// Rota pública sem limite nenhum permitia inundar essa tabela com termos falsos (o "sinal de
+// demanda" que o gerente vê fica sem sentido se qualquer script conseguir gravar sem limite —
+// ver auditoria de segurança de 2026-08).
+const limiteRegistrarBusca = rateLimit({ janelaMs: 60 * 1000, max: 20 });
+
 // Pública: o próprio visitante registra quando busca algo e não acha nada no catálogo.
-router.post("/", ah(async (req, res) => {
+router.post("/", limiteRegistrarBusca, ah(async (req, res) => {
   const b = req.body || {};
   const termo = (b.termo || "").trim().slice(0, 200);
   if (!b.catalogoId || !b.consultorId || !termo) {
