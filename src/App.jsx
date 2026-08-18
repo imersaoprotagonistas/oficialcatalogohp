@@ -3,7 +3,7 @@ import {
   Package, Users, LayoutGrid, Activity, Plus, Trash2, Pencil, Copy,
   ShoppingCart, Send, Eye, LogOut, X, Check, Minus, MessageCircle,
   UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw,
-  ChevronUp, ChevronDown, Link2, Pause, Play, Download
+  ChevronUp, ChevronDown, Link2, Pause, Play
 } from "lucide-react";
 import { api } from "./api.js";
 
@@ -108,63 +108,6 @@ function nomeProdutoSemMarcaDuplicada(p) {
 // usa direto, sem round-trip; senão busca na rota dedicada (leve, cacheável pelo navegador).
 // Ver server/routes/produtos.js e server/routes/catalogos.js.
 const produtoImgSrc = (p) => (p?.imagem ? p.imagem : p?.temImagem ? api.produtos.imagemUrl(p.id) : null);
-
-// --- Exportação CSV do cadastro de produtos (painel de Compras) ---
-// Os produtos já estão todos carregados em memória — com custo incluso, já que só quem loga
-// como compras/gerente recebe esse campo do backend (ver toRow/incluirCusto em
-// server/routes/produtos.js) — então o CSV é montado direto no navegador, sem rota nova.
-const CSV_COLUNAS_PRODUTOS = [
-  "Marca", "Produto", "Gramatura", "Categoria", "Sabores", "Ativo", "Custo",
-  "1ª Compra - De", "1ª Compra - Desconto (%)", "1ª Compra - Por", "1ª Compra - À vista",
-  "Farm - De", "Farm - Desconto (%)", "Farm - Por", "Farm - À vista",
-  "Tabelado - De", "Tabelado - Por",
-  "Tabelado 1ª Compra - De", "Tabelado 1ª Compra - Desconto (%)", "Tabelado 1ª Compra - Por", "Tabelado 1ª Compra - À vista",
-  "Margem 1ª Compra (%)", "Margem Farm (%)",
-];
-// Só entra aspas quando o valor de fato precisa (tem separador, aspas ou quebra de linha) —
-// número puro sai sem aspas pra abrir certinho como número no Excel/planilhas.
-function celulaCSV(valor) {
-  const s = valor === null || valor === undefined ? "" : String(valor);
-  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-// Vírgula como separador decimal (padrão BR) — o arquivo usa ";" como delimitador de coluna
-// justamente pra não confundir com essa vírgula quando aberto direto no Excel em pt-BR.
-function numeroCSV(n) {
-  return (Number(n) || 0).toFixed(2).replace(".", ",");
-}
-function margemProdutoSetor(p, setor) {
-  const vista = round2(p.precos?.[setor]?.vista || 0);
-  return vista > 0 ? round2(((vista - round2(p.custo || 0)) / vista) * 100) : null;
-}
-function produtosParaCSV(produtos) {
-  const linhas = produtos.map((p) => {
-    const margemPrimeira = margemProdutoSetor(p, "primeira");
-    const margemFarm = margemProdutoSetor(p, "farm");
-    return [
-      p.marca || "", nomeProdutoSemMarcaDuplicada(p), p.gramatura || "", p.categoria || "",
-      (p.sabores || []).join(", "), p.ativo === false ? "Não" : "Sim", numeroCSV(p.custo),
-      numeroCSV(p.precos?.primeira?.de), numeroCSV(p.precos?.primeira?.desconto), numeroCSV(p.precos?.primeira?.parcelado), numeroCSV(p.precos?.primeira?.vista),
-      numeroCSV(p.precos?.farm?.de), numeroCSV(p.precos?.farm?.desconto), numeroCSV(p.precos?.farm?.parcelado), numeroCSV(p.precos?.farm?.vista),
-      numeroCSV(p.precos?.tabelado?.de), numeroCSV(p.precos?.tabelado?.por),
-      numeroCSV(p.precos?.tabeladoPrimeiraCompra?.de), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.desconto), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.parcelado), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.vista),
-      margemPrimeira === null ? "" : numeroCSV(margemPrimeira),
-      margemFarm === null ? "" : numeroCSV(margemFarm),
-    ].map(celulaCSV).join(";");
-  });
-  // BOM (﻿) força o Excel a ler como UTF-8 — sem isso, acento em nome/marca vira caractere
-  // quebrado ao abrir o arquivo direto (mesmo já estando salvo certinho em disco).
-  return "﻿" + [CSV_COLUNAS_PRODUTOS.join(";"), ...linhas].join("\r\n");
-}
-// Dispara o download no navegador — sem round-trip pro servidor, já que os produtos (com custo
-// incluso) já estão carregados em memória no painel de Compras.
-function baixarCSV(nomeArquivo, conteudo) {
-  const blob = new Blob([conteudo], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = nomeArquivo;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 const catalogoCapaSrc = (c) => (c?.capa ? c.capa : c?.temCapa ? api.catalogos.capaUrl(c.id) : null);
 // Baixa uma imagem já salva (das rotas acima) de volta como data URL, pra pré-carregar o
 // formulário de edição sem precisar reenviar o produto/catálogo inteiro só pra manter a foto.
@@ -1725,11 +1668,6 @@ function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem
                 Marcas e categorias
               </button>
             )}
-            <button onClick={() => baixarCSV(`produtos_${hojeISO()}.csv`, produtosParaCSV(produtos))}
-              title="Exporta todos os produtos cadastrados, não só os filtrados abaixo"
-              className="inline-flex items-center gap-1.5 border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-50">
-              <Download size={14} /> Exportar CSV
-            </button>
             <button onClick={() => { imagemRequestRef.current += 1; setCarregandoImagem(false); setEditing(blank); }}
               className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
               <Plus size={14} /> Novo produto
