@@ -3,12 +3,33 @@ import {
   Package, Users, LayoutGrid, Activity, Plus, Trash2, Pencil, Copy,
   ShoppingCart, Send, Eye, LogOut, X, Check, Minus, MessageCircle,
   UserPlus, Filter, TrendingUp, ChevronRight, Search, RefreshCw,
-  ChevronUp, ChevronDown, Link2, Pause, Play
+  ChevronUp, ChevronDown, Link2, Pause, Play, Download
 } from "lucide-react";
 import { api } from "./api.js";
 
 const SETORES = { primeira: "1º Compra", farm: "Farm" };
-const CATEGORIA_SUGESTOES = ["Proteínas", "Creatina", "Aminoácidos", "Vitaminas", "Pré-treino", "Snacks", "Acessórios", "Outros"];
+// Ordenação da página "Todos os produtos" (ver CatalogoPublico) — cor de cada <option> precisa
+// vir inline: color-scheme:dark no <select> não é suficiente em todo navegador/SO pra evitar
+// texto branco em cima de fundo branco no popup nativo, então força aqui também (belt-and-suspenders).
+const OPCOES_ORDENAR = [
+  { value: "relevancia", label: "Relevância" },
+  { value: "menor", label: "Menor preço" },
+  { value: "maior", label: "Maior preço" },
+  { value: "az", label: "Nome A-Z" },
+];
+// Barra de rolagem das listas de filtro (sidebar "Todos os produtos") — sem isso, o navegador
+// desenha a barra padrão (cinza claro em cima de fundo cinza claro), que destoa muito do fundo
+// escuro da página. Trilho transparente (some no bg-neutral-950 da página) + rolo num tom de
+// branco bem sutil, no mesmo espírito das bordas brancas translúcidas usadas no resto da tela.
+const SCROLLBAR_ESCURO = "[scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.15)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/15 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden";
+const CATEGORIA_SUGESTOES = ["Proteínas", "Creatina", "Aminoácidos", "Vitaminas", "Pré-treino", "Snacks", "Acessórios", "Outros"].map((c) => c.toUpperCase());
+// Sabor é o oposto de Categoria/Marca (que são sempre MAIÚSCULA): sempre minúscula, com a
+// primeira letra de cada palavra maiúscula (ex: "abacaxi com hortelã" → "Abacaxi Com Hortelã").
+// Não usa trim/split de propósito — precisa rodar a cada tecla digitada (ver o <input> de sabor
+// no ProdutoForm) sem atrapalhar espaço no fim de palavra enquanto a pessoa ainda está digitando.
+function tituloCase(str) {
+  return (str || "").toLowerCase().replace(/(^|\s)(\p{L})/gu, (m) => m.toUpperCase());
+}
 const CATEGORIA_DOT = {
   "Proteínas": "bg-red-500", "Creatina": "bg-emerald-500", "Aminoácidos": "bg-lime-500",
   "Vitaminas": "bg-sky-500", "Pré-treino": "bg-violet-500", "Snacks": "bg-cyan-500",
@@ -87,6 +108,63 @@ function nomeProdutoSemMarcaDuplicada(p) {
 // usa direto, sem round-trip; senão busca na rota dedicada (leve, cacheável pelo navegador).
 // Ver server/routes/produtos.js e server/routes/catalogos.js.
 const produtoImgSrc = (p) => (p?.imagem ? p.imagem : p?.temImagem ? api.produtos.imagemUrl(p.id) : null);
+
+// --- Exportação CSV do cadastro de produtos (painel de Compras) ---
+// Os produtos já estão todos carregados em memória — com custo incluso, já que só quem loga
+// como compras/gerente recebe esse campo do backend (ver toRow/incluirCusto em
+// server/routes/produtos.js) — então o CSV é montado direto no navegador, sem rota nova.
+const CSV_COLUNAS_PRODUTOS = [
+  "Marca", "Produto", "Gramatura", "Categoria", "Sabores", "Ativo", "Custo",
+  "1ª Compra - De", "1ª Compra - Desconto (%)", "1ª Compra - Por", "1ª Compra - À vista",
+  "Farm - De", "Farm - Desconto (%)", "Farm - Por", "Farm - À vista",
+  "Tabelado - De", "Tabelado - Por",
+  "Tabelado 1ª Compra - De", "Tabelado 1ª Compra - Desconto (%)", "Tabelado 1ª Compra - Por", "Tabelado 1ª Compra - À vista",
+  "Margem 1ª Compra (%)", "Margem Farm (%)",
+];
+// Só entra aspas quando o valor de fato precisa (tem separador, aspas ou quebra de linha) —
+// número puro sai sem aspas pra abrir certinho como número no Excel/planilhas.
+function celulaCSV(valor) {
+  const s = valor === null || valor === undefined ? "" : String(valor);
+  return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+// Vírgula como separador decimal (padrão BR) — o arquivo usa ";" como delimitador de coluna
+// justamente pra não confundir com essa vírgula quando aberto direto no Excel em pt-BR.
+function numeroCSV(n) {
+  return (Number(n) || 0).toFixed(2).replace(".", ",");
+}
+function margemProdutoSetor(p, setor) {
+  const vista = round2(p.precos?.[setor]?.vista || 0);
+  return vista > 0 ? round2(((vista - round2(p.custo || 0)) / vista) * 100) : null;
+}
+function produtosParaCSV(produtos) {
+  const linhas = produtos.map((p) => {
+    const margemPrimeira = margemProdutoSetor(p, "primeira");
+    const margemFarm = margemProdutoSetor(p, "farm");
+    return [
+      p.marca || "", nomeProdutoSemMarcaDuplicada(p), p.gramatura || "", p.categoria || "",
+      (p.sabores || []).join(", "), p.ativo === false ? "Não" : "Sim", numeroCSV(p.custo),
+      numeroCSV(p.precos?.primeira?.de), numeroCSV(p.precos?.primeira?.desconto), numeroCSV(p.precos?.primeira?.parcelado), numeroCSV(p.precos?.primeira?.vista),
+      numeroCSV(p.precos?.farm?.de), numeroCSV(p.precos?.farm?.desconto), numeroCSV(p.precos?.farm?.parcelado), numeroCSV(p.precos?.farm?.vista),
+      numeroCSV(p.precos?.tabelado?.de), numeroCSV(p.precos?.tabelado?.por),
+      numeroCSV(p.precos?.tabeladoPrimeiraCompra?.de), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.desconto), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.parcelado), numeroCSV(p.precos?.tabeladoPrimeiraCompra?.vista),
+      margemPrimeira === null ? "" : numeroCSV(margemPrimeira),
+      margemFarm === null ? "" : numeroCSV(margemFarm),
+    ].map(celulaCSV).join(";");
+  });
+  // BOM (﻿) força o Excel a ler como UTF-8 — sem isso, acento em nome/marca vira caractere
+  // quebrado ao abrir o arquivo direto (mesmo já estando salvo certinho em disco).
+  return "﻿" + [CSV_COLUNAS_PRODUTOS.join(";"), ...linhas].join("\r\n");
+}
+// Dispara o download no navegador — sem round-trip pro servidor, já que os produtos (com custo
+// incluso) já estão carregados em memória no painel de Compras.
+function baixarCSV(nomeArquivo, conteudo) {
+  const blob = new Blob([conteudo], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nomeArquivo;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 const catalogoCapaSrc = (c) => (c?.capa ? c.capa : c?.temCapa ? api.catalogos.capaUrl(c.id) : null);
 // Baixa uma imagem já salva (das rotas acima) de volta como data URL, pra pré-carregar o
 // formulário de edição sem precisar reenviar o produto/catálogo inteiro só pra manter a foto.
@@ -1647,6 +1725,11 @@ function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem
                 Marcas e categorias
               </button>
             )}
+            <button onClick={() => baixarCSV(`produtos_${hojeISO()}.csv`, produtosParaCSV(produtos))}
+              title="Exporta todos os produtos cadastrados, não só os filtrados abaixo"
+              className="inline-flex items-center gap-1.5 border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-stone-50">
+              <Download size={14} /> Exportar CSV
+            </button>
             <button onClick={() => { imagemRequestRef.current += 1; setCarregandoImagem(false); setEditing(blank); }}
               className="inline-flex items-center gap-1.5 bg-orange-400 text-neutral-950 text-xs font-bold uppercase tracking-wide px-3.5 py-2 rounded-md hover:bg-orange-300">
               <Plus size={14} /> Novo produto
@@ -1786,7 +1869,9 @@ function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
 
   async function criar(e) {
     e.preventDefault();
-    const nome = novoNome.trim();
+    // Só marca/categoria passam por aqui (não tem aba de sabor nesse modal) — sempre maiúscula,
+    // mesma regra do ProdutoForm.
+    const nome = novoNome.trim().toUpperCase();
     if (!nome) return;
     setCriando(true);
     try {
@@ -1801,8 +1886,11 @@ function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
   }
   async function renomear(atual) {
     const novo = prompt(`Novo nome pra "${atual}" (aplica em todos os produtos que usam esse valor):`, atual);
-    if (!novo || !novo.trim() || novo.trim() === atual) return;
-    await onRenomear(aba, atual, novo.trim());
+    // Marca e categoria são sempre maiúsculas (mesma regra do ProdutoForm) — sem isso, renomear
+    // por aqui podia reintroduzir a duplicidade que essa própria tela existe pra limpar.
+    const novoNormalizado = novo?.trim().toUpperCase();
+    if (!novoNormalizado || novoNormalizado === atual) return;
+    await onRenomear(aba, atual, novoNormalizado);
     await carregar();
   }
   async function excluir(atual, qtd) {
@@ -1844,7 +1932,7 @@ function MarcasCategoriasModal({ onRenomear, onExcluir, onFechar }) {
         {!erro && lista !== null && (
           <>
             <form onSubmit={criar} className="flex gap-2 mb-2.5 shrink-0">
-              <input value={novoNome} onChange={(e) => setNovoNome(e.target.value)} placeholder={`Nova ${aba}...`}
+              <input value={novoNome} onChange={(e) => setNovoNome(e.target.value.toUpperCase())} placeholder={`Nova ${aba}...`}
                 className="flex-1 border border-stone-300 rounded-lg px-2.5 py-1.5 text-sm" />
               <button type="submit" disabled={criando}
                 className="inline-flex items-center gap-1 bg-stone-900 text-white text-[11px] font-bold uppercase tracking-wide px-3 py-1.5 rounded-md hover:bg-stone-800 disabled:opacity-60">
@@ -2042,7 +2130,7 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
   }
   const [novoSabor, setNovoSabor] = useState("");
   function adicionarSabor() {
-    const v = novoSabor.trim();
+    const v = tituloCase(novoSabor.trim());
     if (!v || (f.sabores || []).includes(v)) { setNovoSabor(""); return; }
     setF({ ...f, sabores: [...(f.sabores || []), v] });
     setNovoSabor("");
@@ -2133,7 +2221,10 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
         </div>
         <div>
           <label className="text-[11px] text-stone-400 block mb-1">Categoria</label>
-          <input list="cats" value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })}
+          {/* Sempre maiúscula — sem isso, "Creatina" e "CREATINA" nasciam como duas categorias
+              diferentes (o filtro do catálogo até agrupa por chave minúscula pra disfarçar,
+              ver useFiltroProdutos, mas o dado em si ficava duplicado). */}
+          <input list="cats" value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value.toUpperCase() })}
             className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           <datalist id="cats">{CATEGORIA_SUGESTOES.map((c) => <option key={c} value={c} />)}</datalist>
         </div>
@@ -2159,7 +2250,9 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
       <div className="grid sm:grid-cols-2 gap-3">
         <div>
           <label className="text-[11px] text-stone-400 block mb-1">Marca</label>
-          <input required list="marcas-existentes" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}
+          {/* Mesma regra da Categoria acima — sempre maiúscula, pra "Synthesize" e "SYNTHESIZE"
+              nunca mais nascerem como duas marcas diferentes. */}
+          <input required list="marcas-existentes" value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value.toUpperCase() })}
             className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           <datalist id="marcas-existentes">{(marcas || []).map((m) => <option key={m} value={m} />)}</datalist>
         </div>
@@ -2215,7 +2308,10 @@ function ProdutoForm({ inicial, onSalvar, onCancelar, marcas, podeAlterarCusto =
           {(f.sabores || []).length === 0 && <span className="text-[11px] text-stone-400">Nenhum sabor cadastrado — produto sem variação de sabor.</span>}
         </div>
         <div className="flex gap-2">
-          <input value={novoSabor} onChange={(e) => setNovoSabor(e.target.value)}
+          {/* Sabor é o oposto de Categoria/Marca: sempre minúscula, com a primeira letra de cada
+              palavra maiúscula (mesmo motivo — "baunilha" e "BAUNILHA" nasciam como dois sabores
+              diferentes no filtro do catálogo, ver tituloCase). */}
+          <input value={novoSabor} onChange={(e) => setNovoSabor(tituloCase(e.target.value))}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); adicionarSabor(); } }}
             placeholder="Ex: Chocolate" className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           <button type="button" onClick={adicionarSabor}
@@ -3021,7 +3117,7 @@ function CarrosselProdutos({ itens, grupos, qtdPorProduto, onAbrirItem, accent }
 // Estado "sem resultado" da busca: em vez de só avisar que não achou, oferece um jeito
 // de perguntar pro consultor (WhatsApp já preenchido) e sugere produtos parecidos, pra não
 // perder a venda por causa de um produto que não está nesse catálogo específico.
-function SemResultados({ busca, categoriaFiltro, itensValidos, consultor, catalogo, qtdPorProduto, onAbrir, accent, onBuscaSemResultado }) {
+function SemResultados({ busca, categoriaFiltro, itensValidos, consultor, catalogo, qtdPorProduto, onAbrir, accent, onBuscaSemResultado, onVerTodos }) {
   const termo = busca.trim();
 
   useEffect(() => {
@@ -3046,10 +3142,17 @@ function SemResultados({ busca, categoriaFiltro, itensValidos, consultor, catalo
       <p className="text-stone-400 text-sm">
         {termo ? <>Não encontramos <span className="text-white font-semibold">"{termo}"</span> neste catálogo.</> : "Nenhum produto encontrado com esse filtro."}
       </p>
-      <a href={linkWhats} target="_blank" rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 mt-4 text-white font-bold text-sm rounded-lg px-4 py-2.5" style={{ backgroundColor: accent }}>
-        <MessageCircle size={15} /> Perguntar pro consultor no WhatsApp
-      </a>
+      <div className="flex flex-wrap items-center justify-center gap-2.5 mt-4">
+        <a href={linkWhats} target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-white font-bold text-sm rounded-lg px-4 py-2.5" style={{ backgroundColor: accent }}>
+          <MessageCircle size={15} /> Perguntar pro consultor no WhatsApp
+        </a>
+        {onVerTodos && (
+          <button onClick={onVerTodos} className="inline-flex items-center gap-1.5 border border-white/15 text-stone-300 font-bold text-sm rounded-lg px-4 py-2.5 hover:bg-white/5">
+            Ver todos os produtos da HP <ChevronRight size={15} />
+          </button>
+        )}
+      </div>
 
       {sugestoes.length > 0 && (
         <div className="mt-10 text-left">
@@ -3063,8 +3166,84 @@ function SemResultados({ busca, categoriaFiltro, itensValidos, consultor, catalo
   );
 }
 
+// Desliga a entrada pra página "Todos os produtos" no catálogo do cliente — o cadastro do Preço
+// Tabelado (ver precoForaDoCatalogo abaixo) ainda não está completo pra todo o catálogo, então
+// o cliente não pode ver essa página ainda. O código da página continua todo aqui, só os botões
+// que levam até ela ficam escondidos; virar TODOS_PRODUTOS_HABILITADO pra true quando o cadastro
+// tiver terminado é o suficiente pra reativar.
+const TODOS_PRODUTOS_HABILITADO = false;
+
+// Preço mostrado na página "Todos os produtos" (produtos que ainda não entraram neste catálogo)
+// — sempre o Preço Tabelado que o setor de Compras cadastrou (ProdutoForm/BlocoPrecoTabelado),
+// nunca o preço comercial normal (esse é específico de cada catálogo/curadoria). Catálogo de
+// 1ª Compra usa a variante "tabeladoPrimeiraCompra" quando ela estiver preenchida (estratégia
+// comercial pra quem nunca comprou — ver comentário em ProdutoForm), senão cai no tabelado
+// geral. Produto sem nenhum preço tabelado cadastrado ainda não aparece nessa página.
+function precoForaDoCatalogo(p, setor) {
+  if (setor === "primeira") {
+    const tpc = p.precos?.tabeladoPrimeiraCompra;
+    const parcelado = Number(tpc?.parcelado) || 0;
+    if (parcelado > 0) return { produtoId: p.id, produto: p, precoDe: Number(tpc?.de) || 0, precoParcelado: parcelado };
+  }
+  const t = p.precos?.tabelado;
+  const por = Number(t?.por) || 0;
+  if (por > 0) return { produtoId: p.id, produto: p, precoDe: Number(t?.de) || 0, precoParcelado: por };
+  return null;
+}
+
+// Filtro de faixa de preço da página "Todos os produtos" — dois <input type="range"> sobrepostos
+// no mesmo trilho (truque padrão pra simular um slider de intervalo sem depender de biblioteca
+// externa). min/max nulos = filtro não tocado ainda, mostra o trilho inteiro (floor..ceil).
+function FiltroFaixaPreco({ floor, ceil, min, max, onChangeMin, onChangeMax, accent }) {
+  const minVal = min ?? floor;
+  const maxVal = max ?? ceil;
+  const faixa = ceil - floor || 1;
+  // Cor do "thumb" vem de --accent (custom property, herda pro pseudo-elemento do slider —
+  // diferente de border-color inline no <input>, que não alcança ::-webkit-slider-thumb).
+  const thumbClasses = "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[color:var(--accent)] [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[color:var(--accent)] [&::-moz-range-thumb]:cursor-pointer [&::-webkit-slider-runnable-track]:bg-transparent [&::-moz-range-track]:bg-transparent";
+  return (
+    <div style={{ "--accent": accent }}>
+      <div className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-3">Faixa de preço</div>
+      <div className="relative h-4 mb-1">
+        <div className="absolute top-1/2 -translate-y-1/2 inset-x-0 h-1 rounded-full bg-white/10" />
+        <div className="absolute top-1/2 -translate-y-1/2 h-1 rounded-full"
+          style={{ left: `${((minVal - floor) / faixa) * 100}%`, right: `${100 - ((maxVal - floor) / faixa) * 100}%`, backgroundColor: accent }} />
+        <input type="range" min={floor} max={ceil} value={minVal}
+          onChange={(e) => onChangeMin(Math.min(Number(e.target.value), maxVal - 1))}
+          className={`absolute inset-x-0 top-1/2 -translate-y-1/2 w-full h-4 appearance-none bg-transparent pointer-events-none ${thumbClasses}`} />
+        <input type="range" min={floor} max={ceil} value={maxVal}
+          onChange={(e) => onChangeMax(Math.max(Number(e.target.value), minVal + 1))}
+          className={`absolute inset-x-0 top-1/2 -translate-y-1/2 w-full h-4 appearance-none bg-transparent pointer-events-none ${thumbClasses}`} />
+      </div>
+      <div className="flex items-center gap-2 mt-2.5">
+        <input type="number" value={minVal} min={floor} max={maxVal}
+          onChange={(e) => onChangeMin(e.target.value === "" ? floor : Math.min(Number(e.target.value), maxVal - 1))}
+          className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white font-mono" />
+        <span className="text-stone-500 text-xs shrink-0">até</span>
+        <input type="number" value={maxVal} min={minVal} max={ceil}
+          onChange={(e) => onChangeMax(e.target.value === "" ? ceil : Math.max(Number(e.target.value), minVal + 1))}
+          className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white font-mono" />
+      </div>
+    </div>
+  );
+}
+
 function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPrimeiraVisualizacao, onAdicionouCarrinho, onPedido, onBuscaSemResultado, onSair }) {
   const [carrinho, setCarrinho] = useState({});
+  // Página "Todos os produtos" — mesmo carrinho/modal da tela normal (ver carrinhoItens abaixo),
+  // só troca o conteúdo principal. Não muda a URL de propósito: é o mesmo envio/rastreamento
+  // do catálogo, só olhando o cadastro inteiro em vez da curadoria. Filtros em sidebar (estilo
+  // e-commerce: categoria + marca + sabor + faixa de preço), não mais agrupado por categoria —
+  // o cliente vê a lista inteira de uma vez e refina com os filtros, igual todo marketplace.
+  const [modoTodos, setModoTodos] = useState(false);
+  const [buscaTodos, setBuscaTodos] = useState("");
+  const [categoriaTodos, setCategoriaTodos] = useState("todas");
+  const [marcasTodosSel, setMarcasTodosSel] = useState([]); // [] = todas as marcas
+  const [saboresTodosSel, setSaboresTodosSel] = useState([]); // [] = todos os sabores
+  const [precoMinSel, setPrecoMinSel] = useState(null); // null = usa o menor preço disponível
+  const [precoMaxSel, setPrecoMaxSel] = useState(null); // null = usa o maior preço disponível
+  const [ordenarTodos, setOrdenarTodos] = useState("relevancia");
+  const [filtrosAbertos, setFiltrosAbertos] = useState(false); // drawer de filtros no mobile
   const [showCart, setShowCart] = useState(false);
   const [busca, setBusca] = useState("");
   const [categoriaFiltro, setCategoriaFiltro] = useState("todas");
@@ -3076,6 +3255,9 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   useEffect(() => {
     if (!registrouVisita.current && catalogo && consultor) { registrouVisita.current = true; onPrimeiraVisualizacao(); }
   }, [catalogo, consultor]);
+  // Troca de página (catálogo <-> todos os produtos) sobe pro topo — sem isso, o cliente clica
+  // o botão lá embaixo e cai numa tela nova sem ver o cabeçalho/busca dela.
+  useEffect(() => { window.scrollTo({ top: 0, behavior: "instant" }); }, [modoTodos]);
 
   if (!catalogo || !consultor) {
     return (
@@ -3118,12 +3300,127 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
   const produtosEmSecoes = new Set(secoesCuradas.flatMap((s) => s.itens.map((it) => it.produtoId)));
   const itensSemSecao = itensFiltrados.filter((it) => !produtosEmSecoes.has(it.produtoId));
 
+  // Página "Todos os produtos": todo produto cadastrado que ainda não está neste catálogo,
+  // com o Preço Tabelado que Compras definiu (ver precoForaDoCatalogo acima) — produto sem
+  // esse preço cadastrado, ou já presente no catálogo, ou inativo, não aparece aqui.
+  const idsNoCatalogo = new Set(catalogo.itens.map((it) => it.produtoId));
+  const todosProdutosItens = produtos
+    .filter((p) => p.ativo !== false && !idsNoCatalogo.has(p.id))
+    .map((p) => precoForaDoCatalogo(p, catalogo.setor))
+    .filter(Boolean);
+  const categoriasTodos = [...new Set(todosProdutosItens.map((it) => it.produto.categoria || "Outros"))].sort((a, b) => a.localeCompare(b));
+  const marcasTodos = [...new Set(todosProdutosItens.map((it) => it.produto.marca || "Outras marcas"))].sort((a, b) => a.localeCompare(b));
+  const saboresTodosDisp = [...new Set(todosProdutosItens.flatMap((it) => it.produto.sabores || []))].sort((a, b) => a.localeCompare(b));
+  const precosTodosValores = todosProdutosItens.map((it) => it.precoParcelado);
+  const precoFloorTodos = precosTodosValores.length ? Math.floor(Math.min(...precosTodosValores)) : 0;
+  const precoCeilTodos = precosTodosValores.length ? Math.ceil(Math.max(...precosTodosValores)) : 0;
+  const precoMinAtivo = precoMinSel ?? precoFloorTodos;
+  const precoMaxAtivo = precoMaxSel ?? precoCeilTodos;
+
+  const todosFiltrados = todosProdutosItens.filter((it) => {
+    if (categoriaTodos !== "todas" && (it.produto.categoria || "Outros") !== categoriaTodos) return false;
+    if (marcasTodosSel.length > 0 && !marcasTodosSel.includes(it.produto.marca || "Outras marcas")) return false;
+    if (saboresTodosSel.length > 0 && !(it.produto.sabores || []).some((s) => saboresTodosSel.includes(s))) return false;
+    if (buscaTodos.trim() && !it.produto.nome.toLowerCase().includes(buscaTodos.trim().toLowerCase())) return false;
+    if (it.precoParcelado < precoMinAtivo || it.precoParcelado > precoMaxAtivo) return false;
+    return true;
+  });
+  const todosOrdenados = [...todosFiltrados].sort((a, b) => {
+    if (ordenarTodos === "menor") return a.precoParcelado - b.precoParcelado;
+    if (ordenarTodos === "maior") return b.precoParcelado - a.precoParcelado;
+    if (ordenarTodos === "az") return a.produto.nome.localeCompare(b.produto.nome);
+    return 0; // relevância = ordem em que veio do cadastro
+  });
+  const filtrosAtivosTodos = (categoriaTodos !== "todas" ? 1 : 0) + marcasTodosSel.length + saboresTodosSel.length
+    + (precoMinSel != null || precoMaxSel != null ? 1 : 0);
+  function limparFiltrosTodos() {
+    setCategoriaTodos("todas"); setMarcasTodosSel([]); setSaboresTodosSel([]);
+    setPrecoMinSel(null); setPrecoMaxSel(null); setBuscaTodos("");
+  }
+  function toggleMarcaTodos(m) {
+    setMarcasTodosSel((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]));
+  }
+  function toggleSaborTodos(s) {
+    setSaboresTodosSel((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
+  }
+  // Conteúdo da sidebar de filtros — mesmo bloco usado fixo no desktop e dentro do drawer no
+  // mobile (chamado como função, não componente, senão o React remonta e perde o foco do input
+  // de busca a cada tecla digitada).
+  function renderFiltrosTodos() {
+    return (
+      <>
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-500" />
+          <input value={buscaTodos} onChange={(e) => setBuscaTodos(e.target.value)} placeholder="Buscar produto..."
+            className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500/50" />
+        </div>
+
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-2.5">Categoria</div>
+          <div className={`space-y-0.5 max-h-56 overflow-y-auto pr-1 ${SCROLLBAR_ESCURO}`}>
+            <button onClick={() => setCategoriaTodos("todas")}
+              className={`block w-full text-left text-sm rounded-lg px-2.5 py-1.5 transition ${categoriaTodos === "todas" ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"}`}>
+              Todas as categorias
+            </button>
+            {categoriasTodos.map((cat) => (
+              <button key={cat} onClick={() => setCategoriaTodos(cat)}
+                className={`flex items-center gap-1.5 w-full text-left text-sm rounded-lg px-2.5 py-1.5 transition ${categoriaTodos === cat ? "bg-white/10 text-white font-semibold" : "text-stone-400 hover:text-white hover:bg-white/5"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${CATEGORIA_DOT[cat] || "bg-stone-400"}`} /> <span className="truncate">{cat}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-2.5">Marca</div>
+          <div className={`space-y-1.5 max-h-48 overflow-y-auto pr-1 ${SCROLLBAR_ESCURO}`}>
+            {marcasTodos.map((m) => (
+              <label key={m} className="flex items-center gap-2 text-sm text-stone-300 cursor-pointer hover:text-white">
+                <input type="checkbox" checked={marcasTodosSel.includes(m)} onChange={() => toggleMarcaTodos(m)}
+                  className="accent-orange-500 w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{m}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {saboresTodosDisp.length > 0 && (
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-stone-400 mb-2.5">Sabor</div>
+            <div className={`space-y-1.5 max-h-48 overflow-y-auto pr-1 ${SCROLLBAR_ESCURO}`}>
+              {saboresTodosDisp.map((s) => (
+                <label key={s} className="flex items-center gap-2 text-sm text-stone-300 cursor-pointer hover:text-white">
+                  <input type="checkbox" checked={saboresTodosSel.includes(s)} onChange={() => toggleSaborTodos(s)}
+                    className="accent-orange-500 w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{s}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {precoCeilTodos > precoFloorTodos && (
+          <FiltroFaixaPreco floor={precoFloorTodos} ceil={precoCeilTodos} min={precoMinSel} max={precoMaxSel}
+            onChangeMin={setPrecoMinSel} onChangeMax={setPrecoMaxSel} accent={accent} />
+        )}
+
+        {filtrosAtivosTodos > 0 && (
+          <button onClick={limparFiltrosTodos} className="text-xs font-bold uppercase tracking-wide text-stone-400 hover:text-white underline underline-offset-2">
+            Limpar filtros
+          </button>
+        )}
+      </>
+    );
+  }
+
   // Carrinho: { [produtoId]: { [sabor || SEM_SABOR]: quantidade } } — permite pedir
   // vários sabores do mesmo produto, cada combinação produto+sabor vira uma linha.
   const qtdTotal = Object.values(carrinho).reduce((s, porSabor) => s + Object.values(porSabor).reduce((s2, q) => s2 + q, 0), 0);
   const qtdPorProduto = (produtoId) => Object.values(carrinho[produtoId] || {}).reduce((s, q) => s + q, 0);
   const carrinhoItens = Object.entries(carrinho).flatMap(([produtoId, porSabor]) => {
-    const item = itensValidos.find((it) => it.produtoId === produtoId);
+    // Item pode ter vindo do catálogo curado ou da página "Todos os produtos" (preço tabelado)
+    // — o carrinho/pedido não distingue a origem, só precisa achar o preço em algum dos dois.
+    const item = itensValidos.find((it) => it.produtoId === produtoId) || todosProdutosItens.find((it) => it.produtoId === produtoId);
     if (!item) return [];
     return Object.entries(porSabor).filter(([, q]) => q > 0).map(([saborKey, quantidade]) => ({
       produtoId, sabor: saborKey === SEM_SABOR ? null : saborKey, quantidade,
@@ -3183,101 +3480,207 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
 
       {/* Navbar */}
       <div className="border-b border-white/10 px-6 py-3 flex items-center justify-between">
-        <div className="font-black tracking-tight">HP <span className="text-orange-500">DISTRIBUIDORA</span></div>
+        {modoTodos ? (
+          <button onClick={() => setModoTodos(false)} className="inline-flex items-center gap-1.5 text-sm font-semibold text-stone-300 hover:text-white">
+            <ChevronRight size={16} className="rotate-180" /> Voltar ao catálogo
+          </button>
+        ) : (
+          <div className="font-black tracking-tight">HP <span className="text-orange-500">DISTRIBUIDORA</span></div>
+        )}
         <span className="text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
-          Catálogo {SETORES[catalogo.setor]}
+          {modoTodos ? "Catálogo completo" : `Catálogo ${SETORES[catalogo.setor]}`}
         </span>
       </div>
 
       {/* Hero */}
-      <div className="px-6 pt-10 pb-8 max-w-6xl mx-auto grid lg:grid-cols-2 gap-8 items-center">
-        <div>
-          <span className="inline-block text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 mb-4 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
-            Catálogo {SETORES[catalogo.setor]}
-          </span>
-          <h1 className="font-black text-4xl sm:text-5xl leading-[1.05]">{catalogo.nome}</h1>
-          <p className="font-semibold text-sm mt-3" style={{ color: accent }}>{catalogo.subtitulo || "Escolha seus suplementos e envie seu pedido"}</p>
-          <p className="text-stone-400 text-sm mt-1">{itensValidos.length} produtos selecionados especialmente pra você.</p>
-          <button onClick={() => gradeRef.current?.scrollIntoView({ behavior: "smooth" })}
-            className="mt-5 transition text-white font-bold text-sm rounded-lg px-5 py-3" style={{ backgroundColor: accent }}>
-            Ver produtos
-          </button>
-          <p className="text-stone-500 text-xs mt-3">Atendido por <span className="text-stone-300 font-semibold">{consultor.nome}</span> — o pedido vai direto pro WhatsApp dele.</p>
+      {modoTodos ? (
+        <div className="px-6 pt-10 pb-8 max-w-6xl mx-auto">
+          <h1 className="font-black text-3xl sm:text-4xl leading-[1.05]">Todos os produtos da HP Distribuidora</h1>
+          <p className="text-stone-400 text-sm mt-3">Não achou o que queria no catálogo? Aqui está tudo o que a HP tem disponível, com o preço de tabela.</p>
         </div>
-        <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogoCapaSrc(catalogo) ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
-          {catalogoCapaSrc(catalogo) ? (
-            <img src={catalogoCapaSrc(catalogo)} alt={catalogo.nome} className="w-full h-full object-cover" />
-          ) : (
-            <div className="text-center">
-              <div className="font-black text-xl" style={{ color: accent }}>{catalogo.nome}</div>
-              <div className="text-stone-500 text-xs mt-1">HP Distribuidora</div>
+      ) : (
+        <div className="px-6 pt-10 pb-8 max-w-6xl mx-auto grid lg:grid-cols-2 gap-8 items-center">
+          <div>
+            <span className="inline-block text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 mb-4 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
+              Catálogo {SETORES[catalogo.setor]}
+            </span>
+            <h1 className="font-black text-4xl sm:text-5xl leading-[1.05]">{catalogo.nome}</h1>
+            <p className="font-semibold text-sm mt-3" style={{ color: accent }}>{catalogo.subtitulo || "Escolha seus suplementos e envie seu pedido"}</p>
+            <p className="text-stone-400 text-sm mt-1">{itensValidos.length} produtos selecionados especialmente pra você.</p>
+            <button onClick={() => gradeRef.current?.scrollIntoView({ behavior: "smooth" })}
+              className="mt-5 transition text-white font-bold text-sm rounded-lg px-5 py-3" style={{ backgroundColor: accent }}>
+              Ver produtos
+            </button>
+            <p className="text-stone-500 text-xs mt-3">Atendido por <span className="text-stone-300 font-semibold">{consultor.nome}</span> — o pedido vai direto pro WhatsApp dele.</p>
+          </div>
+          <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogoCapaSrc(catalogo) ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
+            {catalogoCapaSrc(catalogo) ? (
+              <img src={catalogoCapaSrc(catalogo)} alt={catalogo.nome} className="w-full h-full object-cover" />
+            ) : (
+              <div className="text-center">
+                <div className="font-black text-xl" style={{ color: accent }}>{catalogo.nome}</div>
+                <div className="text-stone-500 text-xs mt-1">HP Distribuidora</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Busca + filtros do catálogo curado — a página "Todos os produtos" tem seu próprio painel
+          de filtros em sidebar, mais abaixo (não reaproveita esta barra). */}
+      {!modoTodos && (
+        <div ref={gradeRef} className="sticky top-0 z-30 bg-neutral-950/95 backdrop-blur border-y border-white/10 px-6 py-3 scroll-mt-0">
+          <div className="max-w-6xl mx-auto space-y-2.5">
+            <div className="flex gap-2">
+              <div className="flex-1 relative">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
+                <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar produto..."
+                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500/50" />
+              </div>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              <button onClick={() => setCategoriaFiltro("todas")}
+                className={`shrink-0 text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-full border ${categoriaFiltro === "todas" ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
+                Todas
+              </button>
+              {categoriasPresentes.map((cat) => (
+                <button key={cat} onClick={() => setCategoriaFiltro(cat)}
+                  className={`shrink-0 inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border ${categoriaFiltro === cat ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[cat] || "bg-stone-400"}`} /> {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modoTodos ? (
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          {/* Barra mobile: abre o drawer de filtros (sidebar vira "hidden lg:block" abaixo) */}
+          <div className="flex items-center justify-between gap-3 mb-5 lg:hidden">
+            <button onClick={() => setFiltrosAbertos(true)}
+              className="inline-flex items-center gap-1.5 border border-white/15 text-stone-200 text-xs font-bold uppercase tracking-wide rounded-lg px-3.5 py-2">
+              <Filter size={14} /> Filtros
+              {filtrosAtivosTodos > 0 && (
+                <span className="bg-orange-500 text-neutral-950 rounded-full min-w-[16px] h-4 px-1 text-[10px] font-black flex items-center justify-center">{filtrosAtivosTodos}</span>
+              )}
+            </button>
+            {/* color-scheme:dark + cor inline em cada <option> — o popup nativo do <select> ignora o
+                bg-white/5 do Tailwind (fundo transparente vira branco sólido do navegador) e em
+                alguns navegadores/SOs nem o color-scheme muda isso, daí o inline como reforço:
+                senão texto branco em cima de fundo branco fica ilegível assim que abre a lista. */}
+            <select value={ordenarTodos} onChange={(e) => setOrdenarTodos(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white [color-scheme:dark]">
+              {OPCOES_ORDENAR.map((o) => (
+                <option key={o.value} value={o.value} style={{ backgroundColor: "#171717", color: "#fff" }}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="lg:flex lg:gap-8 lg:items-start">
+            {/* Sidebar de filtros — fixa no desktop, some no mobile (some ela por um drawer, abaixo) */}
+            <aside className={`hidden lg:block w-60 shrink-0 space-y-6 sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto pb-6 pr-1 ${SCROLLBAR_ESCURO}`}>
+              {renderFiltrosTodos()}
+            </aside>
+
+            <div className="flex-1 min-w-0">
+              <div className="hidden lg:flex items-center justify-between mb-4">
+                <p className="text-stone-400 text-xs">{todosOrdenados.length} produto{todosOrdenados.length === 1 ? "" : "s"}</p>
+                <select value={ordenarTodos} onChange={(e) => setOrdenarTodos(e.target.value)}
+                  className="bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white [color-scheme:dark]">
+                  {OPCOES_ORDENAR.map((o) => (
+                    <option key={o.value} value={o.value} style={{ backgroundColor: "#171717", color: "#fff" }}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              {todosOrdenados.length === 0 ? (
+                <p className="text-stone-400 text-sm text-center py-16">Nenhum produto encontrado com esse filtro.</p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {todosOrdenados.map((it) => (
+                    <ProdutoCard key={it.produtoId} item={it} qtd={qtdPorProduto(it.produtoId)} onAbrir={() => setModalItem(it)} accent={accent} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="max-w-6xl mx-auto px-6 py-8 space-y-10">
+          {/* Seções curadas */}
+          {secoesCuradas.map((s) => (
+            <div key={s.chave}>
+              {/* Gradiente montado em cima da cor cadastrada na seção (ver Painel > Seções) — vai
+                  sumindo pro fundo escuro da página em vez de precisar de um "from/via/to" fixo. */}
+              <div className="rounded-2xl px-5 py-4 mb-4"
+                style={{ background: `linear-gradient(to right, ${hexToRgba(s.cor, 0.55)}, ${hexToRgba(s.cor, 0.22)} 65%, transparent)` }}>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Catálogo {SETORES[catalogo.setor]}</span>
+                <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
+                <p className="text-white/60 text-xs mt-1">{s.desc}</p>
+              </div>
+              <CarrosselProdutos grupos={s.grupos} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
+            </div>
+          ))}
+
+          {/* Todos os produtos — só os que não aparecem em nenhuma seção curada acima */}
+          {(itensFiltrados.length === 0 || itensSemSecao.length > 0) && (
+            <div>
+              <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
+              {itensFiltrados.length === 0 ? (
+                <SemResultados busca={busca} categoriaFiltro={categoriaFiltro} itensValidos={itensValidos}
+                  consultor={consultor} catalogo={catalogo} qtdPorProduto={qtdPorProduto} onAbrir={setModalItem}
+                  accent={accent} onBuscaSemResultado={onBuscaSemResultado}
+                  onVerTodos={TODOS_PRODUTOS_HABILITADO && todosProdutosItens.length > 0 ? () => setModoTodos(true) : undefined} />
+              ) : (
+                <CarrosselProdutos grupos={agruparPorMarca(itensSemSecao)} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
+              )}
+            </div>
+          )}
+
+          {/* Entrada pro catálogo completo — pro cliente que já viu tudo daqui e não achou o que
+              queria (ou só quer conferir se a HP tem outra coisa). Só aparece se tiver o que
+              mostrar lá (produto sem preço tabelado cadastrado não entra, ver precoForaDoCatalogo)
+              e se TODOS_PRODUTOS_HABILITADO estiver ligado. */}
+          {TODOS_PRODUTOS_HABILITADO && todosProdutosItens.length > 0 && (
+            <div className="rounded-2xl border border-dashed border-white/15 px-6 py-8 text-center">
+              <p className="text-stone-300 text-sm">Não encontrou o que precisa neste catálogo?</p>
+              <button onClick={() => setModoTodos(true)}
+                className="inline-flex items-center gap-1.5 mt-3 text-white font-bold text-sm rounded-lg px-5 py-3" style={{ backgroundColor: accent }}>
+                Ver todos os produtos da HP Distribuidora <ChevronRight size={16} />
+              </button>
             </div>
           )}
         </div>
-      </div>
-
-      {/* Busca + filtros */}
-      <div ref={gradeRef} className="sticky top-0 z-30 bg-neutral-950/95 backdrop-blur border-y border-white/10 px-6 py-3 scroll-mt-0">
-        <div className="max-w-6xl mx-auto space-y-2.5">
-          <div className="flex gap-2">
-            <div className="flex-1 relative">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
-              <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar produto..."
-                className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-stone-500 focus:outline-none focus:border-orange-500/50" />
-            </div>
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            <button onClick={() => setCategoriaFiltro("todas")}
-              className={`shrink-0 text-xs font-bold uppercase tracking-wide px-3 py-1.5 rounded-full border ${categoriaFiltro === "todas" ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
-              Todas
-            </button>
-            {categoriasPresentes.map((cat) => (
-              <button key={cat} onClick={() => setCategoriaFiltro(cat)}
-                className={`shrink-0 inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border ${categoriaFiltro === cat ? "bg-white text-neutral-950 border-white" : "border-white/15 text-stone-300"}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${CATEGORIA_DOT[cat] || "bg-stone-400"}`} /> {cat}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-6 py-8 space-y-10">
-        {/* Seções curadas */}
-        {secoesCuradas.map((s) => (
-          <div key={s.chave}>
-            {/* Gradiente montado em cima da cor cadastrada na seção (ver Painel > Seções) — vai
-                sumindo pro fundo escuro da página em vez de precisar de um "from/via/to" fixo. */}
-            <div className="rounded-2xl px-5 py-4 mb-4"
-              style={{ background: `linear-gradient(to right, ${hexToRgba(s.cor, 0.55)}, ${hexToRgba(s.cor, 0.22)} 65%, transparent)` }}>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Catálogo {SETORES[catalogo.setor]}</span>
-              <h2 className="font-black text-2xl mt-0.5">{s.titulo}</h2>
-              <p className="text-white/60 text-xs mt-1">{s.desc}</p>
-            </div>
-            <CarrosselProdutos grupos={s.grupos} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
-          </div>
-        ))}
-
-        {/* Todos os produtos — só os que não aparecem em nenhuma seção curada acima */}
-        {(itensFiltrados.length === 0 || itensSemSecao.length > 0) && (
-          <div>
-            <h2 className="font-black text-xl mb-4">Todos os produtos</h2>
-            {itensFiltrados.length === 0 ? (
-              <SemResultados busca={busca} categoriaFiltro={categoriaFiltro} itensValidos={itensValidos}
-                consultor={consultor} catalogo={catalogo} qtdPorProduto={qtdPorProduto} onAbrir={setModalItem}
-                accent={accent} onBuscaSemResultado={onBuscaSemResultado} />
-            ) : (
-              <CarrosselProdutos grupos={agruparPorMarca(itensSemSecao)} qtdPorProduto={qtdPorProduto} onAbrirItem={setModalItem} accent={accent} />
-            )}
-          </div>
-        )}
-      </div>
+      )}
 
       <div className="border-t border-white/10 px-6 py-6 text-center">
         <p className="text-sm font-bold">HP Distribuidora <span className="text-stone-500 font-normal">· Suplementos pra você vender mais.</span></p>
         <p className="text-stone-500 text-xs mt-1">Preços e condições conforme este catálogo. Em caso de dúvida, fale com {consultor.nome}.</p>
         <p className="text-stone-500 text-xs mt-1">Desenvolvido por <a href="https://acceris.com.br" target="_blank" rel="noopener noreferrer" className="hover:underline">Nil Farias</a></p>
       </div>
+
+      {/* Drawer de filtros da página "Todos os produtos" no mobile — mesmo painel da sidebar
+          desktop (renderFiltrosTodos), só que dentro de uma folha que sobe de baixo. */}
+      {modoTodos && filtrosAbertos && (
+        <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50 lg:hidden">
+          <div className="bg-neutral-900 border border-white/10 w-full rounded-t-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
+              <h3 className="font-black text-sm uppercase tracking-wide">Filtros</h3>
+              <button onClick={() => setFiltrosAbertos(false)}><X size={18} className="text-stone-400" /></button>
+            </div>
+            <div className={`flex-1 overflow-y-auto px-5 py-4 space-y-6 ${SCROLLBAR_ESCURO}`}>
+              {renderFiltrosTodos()}
+            </div>
+            <div className="p-5 pt-3 border-t border-white/10 shrink-0">
+              <button onClick={() => setFiltrosAbertos(false)} style={{ backgroundColor: accent }}
+                className="w-full text-white font-bold text-sm rounded-xl py-3">
+                Ver {todosOrdenados.length} produto{todosOrdenados.length === 1 ? "" : "s"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de detalhes / adicionar */}
       {modalItem && (
