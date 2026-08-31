@@ -2987,42 +2987,35 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
 // ---------------------------------------------------------------------------
 // Catálogo público (cliente) — vitrine escura, estilo loja online
 // ---------------------------------------------------------------------------
-// Arrastar-pra-rolar nos carrosséis horizontais: overflow-x-auto sozinho não deixa
-// arrastar com o cursor no mouse, e o toque no touch-action padrão fica ambíguo com o
-// scroll vertical da página. Pointer Events unificam mouse/touch/caneta num só handler;
-// touch-action: pan-y deixa o scroll vertical nativo intacto e só a gente cuida do horizontal.
+// Arrastar-pra-rolar nos carrosséis horizontais — só serve pra MOUSE: overflow-x-auto
+// sozinho já dá scroll horizontal nativo por toque (arrastar o dedo) em qualquer navegador,
+// inclusive iPhone, mas não deixa arrastar com o cursor do mouse. A tentativa anterior usava
+// Pointer Events também pro toque (com touch-action: pan-y pra tentar preservar o scroll
+// vertical da página), mas reimplementar o scroll horizontal via JS no Safari/iOS é frágil e
+// travava o carrossel — daí o bug só aparecer em iPhone. Agora o toque nem passa por aqui:
+// o navegador cuida de tudo nativamente, nos dois eixos.
 function useDragScroll() {
   const ref = useRef(null);
-  const estado = useRef({ arrastando: false, x: 0, y: 0, scrollInicial: 0, moveu: false, pointerId: null });
+  const estado = useRef({ arrastando: false, x: 0, scrollInicial: 0, moveu: false, pointerId: null });
 
   function onPointerDown(e) {
     const el = ref.current;
     if (!el) return;
+    if (e.pointerType !== "mouse") return; // toque/caneta: deixa o scroll nativo agir sozinho
     // Não captura o ponteiro aqui: um clique simples (sem arrastar) precisa continuar
     // chegando normal no botão do produto. Só captura se virar arrasto de verdade (ver onPointerMove).
-    estado.current = { arrastando: true, x: e.clientX, y: e.clientY, scrollInicial: el.scrollLeft, moveu: false, pointerId: e.pointerId };
+    estado.current = { arrastando: true, x: e.clientX, scrollInicial: el.scrollLeft, moveu: false, pointerId: e.pointerId };
   }
   function onPointerMove(e) {
     const el = ref.current;
     if (!el || !estado.current.arrastando) return;
-    const deltaX = e.clientX - estado.current.x;
-    const deltaY = e.clientY - estado.current.y;
-    if (!estado.current.moveu) {
-      // Só vira arrasto horizontal se o gesto for claramente mais horizontal que vertical.
-      // Sem essa checagem, um scroll vertical no iPhone (o polegar quase nunca sobe/desce em
-      // linha reta) passava do limiar de 5px em X e chamava setPointerCapture, o que no
-      // Safari/iOS sequestra o toque e trava o scroll nativo da página — bug só em iPhone.
-      if (Math.abs(deltaX) <= 5 && Math.abs(deltaY) <= 5) return;
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
-        // Gesto vertical: desiste do arrasto e deixa o scroll nativo da página cuidar disso.
-        estado.current.arrastando = false;
-        return;
-      }
+    const delta = e.clientX - estado.current.x;
+    if (Math.abs(delta) > 5 && !estado.current.moveu) {
       estado.current.moveu = true;
       el.setPointerCapture?.(e.pointerId);
       el.style.cursor = "grabbing";
     }
-    if (estado.current.moveu) el.scrollLeft = estado.current.scrollInicial - deltaX;
+    if (estado.current.moveu) el.scrollLeft = estado.current.scrollInicial - delta;
   }
   function soltar() {
     const el = ref.current;
@@ -3050,7 +3043,8 @@ function CarrosselProdutos({ itens, grupos, qtdPorProduto, onAbrirItem, accent }
     <div ref={drag.ref} onPointerDown={drag.onPointerDown} onPointerMove={drag.onPointerMove}
       onPointerUp={drag.onPointerUp} onPointerLeave={drag.onPointerLeave} onPointerCancel={drag.onPointerCancel}
       onClickCapture={drag.onClickCapture}
-      className="flex gap-4 overflow-x-auto pb-2 cursor-grab select-none" style={{ touchAction: "pan-y" }}>
+      className="flex gap-4 overflow-x-auto pb-2 cursor-grab select-none"
+      style={{ WebkitOverflowScrolling: "touch" }}>
       {gruposFinal.map((g, i) => (
         <div key={g.marca || i} className={`shrink-0 ${i > 0 ? "pl-4 border-l border-white/10" : ""}`}>
           {g.marca && <span className="block mb-2.5 text-[11px] font-bold uppercase tracking-wide text-stone-400">{g.marca}</span>}
