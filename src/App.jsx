@@ -3022,25 +3022,36 @@ function CatalogoConsultorCard({ catalogo, consultor, envios, onCriarEnvio, onSi
 // touch-action: pan-y deixa o scroll vertical nativo intacto e só a gente cuida do horizontal.
 function useDragScroll() {
   const ref = useRef(null);
-  const estado = useRef({ arrastando: false, x: 0, scrollInicial: 0, moveu: false, pointerId: null });
+  const estado = useRef({ arrastando: false, x: 0, y: 0, scrollInicial: 0, moveu: false, pointerId: null });
 
   function onPointerDown(e) {
     const el = ref.current;
     if (!el) return;
     // Não captura o ponteiro aqui: um clique simples (sem arrastar) precisa continuar
     // chegando normal no botão do produto. Só captura se virar arrasto de verdade (ver onPointerMove).
-    estado.current = { arrastando: true, x: e.clientX, scrollInicial: el.scrollLeft, moveu: false, pointerId: e.pointerId };
+    estado.current = { arrastando: true, x: e.clientX, y: e.clientY, scrollInicial: el.scrollLeft, moveu: false, pointerId: e.pointerId };
   }
   function onPointerMove(e) {
     const el = ref.current;
     if (!el || !estado.current.arrastando) return;
-    const delta = e.clientX - estado.current.x;
-    if (Math.abs(delta) > 5 && !estado.current.moveu) {
+    const deltaX = e.clientX - estado.current.x;
+    const deltaY = e.clientY - estado.current.y;
+    if (!estado.current.moveu) {
+      // Só vira arrasto horizontal se o gesto for claramente mais horizontal que vertical.
+      // Sem essa checagem, um scroll vertical no iPhone (o polegar quase nunca sobe/desce em
+      // linha reta) passava do limiar de 5px em X e chamava setPointerCapture, o que no
+      // Safari/iOS sequestra o toque e trava o scroll nativo da página — bug só em iPhone.
+      if (Math.abs(deltaX) <= 5 && Math.abs(deltaY) <= 5) return;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) {
+        // Gesto vertical: desiste do arrasto e deixa o scroll nativo da página cuidar disso.
+        estado.current.arrastando = false;
+        return;
+      }
       estado.current.moveu = true;
       el.setPointerCapture?.(e.pointerId);
       el.style.cursor = "grabbing";
     }
-    if (estado.current.moveu) el.scrollLeft = estado.current.scrollInicial - delta;
+    if (estado.current.moveu) el.scrollLeft = estado.current.scrollInicial - deltaX;
   }
   function soltar() {
     const el = ref.current;
