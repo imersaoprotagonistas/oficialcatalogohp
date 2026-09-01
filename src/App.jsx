@@ -3428,7 +3428,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
             <ChevronRight size={16} className="rotate-180" /> Voltar ao catálogo
           </button>
         ) : (
-          <div className="font-black tracking-tight">HP <span className="text-orange-500">DISTRIBUIDORA</span></div>
+          <img src="/favicon.png" alt="HP Distribuidora" className="h-8 w-8" />
         )}
         <span className="text-[11px] font-bold uppercase tracking-wide rounded-full px-3 py-1 border" style={{ color: accent, borderColor: hexToRgba(accent, 0.3), backgroundColor: hexToRgba(accent, 0.15) }}>
           {modoTodos ? "Catálogo completo" : `Catálogo ${SETORES[catalogo.setor]}`}
@@ -3456,7 +3456,7 @@ function CatalogoPublico({ catalogo, consultor, produtos, secoes, simulate, onPr
             </button>
             <p className="text-stone-500 text-xs mt-3">Atendido por <span className="text-stone-300 font-semibold">{consultor.nome}</span> — o pedido vai direto pro WhatsApp dele.</p>
           </div>
-          <div className="hidden lg:flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogoCapaSrc(catalogo) ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
+          <div className="flex rounded-2xl aspect-[4/3] items-center justify-center bg-white/[0.02] overflow-hidden" style={!catalogoCapaSrc(catalogo) ? { border: `2px dashed ${hexToRgba(accent, 0.4)}` } : undefined}>
             {catalogoCapaSrc(catalogo) ? (
               <img src={catalogoCapaSrc(catalogo)} alt={catalogo.nome} className="w-full h-full object-cover" />
             ) : (
