@@ -973,13 +973,8 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
   const [expandido, setExpandido] = useState(null);
   const [editandoId, setEditandoId] = useState(null); // null = criando novo; id = editando catálogo existente
   const [copiado, setCopiado] = useState(null);
-  const formRef = useRef(null);
   const capaRequestRef = useRef(0); // descarta a busca da capa se o usuário trocar de catálogo antes dela terminar
   const [carregandoCapa, setCarregandoCapa] = useState(false); // true entre clicar "Editar" e a capa real chegar
-
-  useEffect(() => {
-    if (criando) formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [criando]);
 
   function iniciarCriacao() {
     const base = {};
@@ -1069,6 +1064,14 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
     }
     setCriando(false); setEditandoId(null);
   }
+  // Fecha o pop-up de criação/edição — tanto pelo botão "Cancelar" quanto clicando fora dele.
+  // Cobre também uma busca de capa ainda em andamento (ver iniciarEdicao acima), senão ela
+  // terminava depois de fechado e abria o formulário sozinha por cima da tela.
+  function fecharFormulario() {
+    capaRequestRef.current += 1;
+    setCarregandoCapa(false);
+    setCriando(false); setEditandoId(null);
+  }
   function publicar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
   function desativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "inativo" } : c))); }
   function reativar(id) { setCatalogos(catalogos.map((c) => (c.id === id ? { ...c, status: "publicado" } : c))); }
@@ -1121,14 +1124,22 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
         )}
       </div>
 
-      {carregandoCapa && (
-        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-5 text-xs text-stone-400">
-          Carregando catálogo…
-        </div>
-      )}
-
-      {criando && (
-        <div ref={formRef} className="bg-white border border-stone-200 rounded-xl p-4 mb-5 space-y-4">
+      {(criando || carregandoCapa) && (
+        // Pop-up em vez de inline: o formulário abrindo no topo da página obrigava a rolar até lá
+        // toda vez que editava um catálogo mais abaixo na lista (mesmo pedido do gerente que já
+        // valeu pro ProdutoForm, ver ProdutosSection). Cobre também carregandoCapa (a busca da
+        // capa antes do form montar, ver iniciarEdicao acima) pra o pop-up já abrir no clique em
+        // "Editar", em vez de um "Carregando…" solto no topo seguido do pop-up de repente.
+        // overflow-y-auto no overlay (não só na caixa) porque esse form é bem alto (lista inteira
+        // de produtos por categoria) — sem isso o topo ficava inacessível em telas menores.
+        <div className="fixed inset-0 bg-black/40 z-50 overflow-y-auto p-4" onClick={fecharFormulario}>
+        <div className="max-w-6xl mx-auto my-4 sm:my-8" onClick={(e) => e.stopPropagation()}>
+        {carregandoCapa ? (
+          <div className="bg-white border border-stone-200 rounded-xl p-4 text-xs text-stone-400">
+            Carregando catálogo…
+          </div>
+        ) : (
+        <div className="bg-white border border-stone-200 rounded-xl p-4 space-y-4">
           <h3 className="text-xs font-bold uppercase tracking-wide text-stone-500">
             {editandoId ? `Editando: ${nome || "catálogo"}` : "Novo catálogo"}
           </h3>
@@ -1336,8 +1347,11 @@ function CatalogosSection({ produtos, consultores, catalogos, setCatalogos, seco
                 <button onClick={() => salvar("rascunho")} className="border border-stone-300 text-stone-600 text-xs font-bold uppercase tracking-wide px-4 py-2 rounded-md">Salvar rascunho</button>
               </>
             )}
-            <button onClick={() => { setCriando(false); setEditandoId(null); }} className="text-stone-500 text-xs px-4 py-2">Cancelar</button>
+            <button onClick={fecharFormulario} className="text-stone-500 text-xs px-4 py-2">Cancelar</button>
           </div>
+        </div>
+        )}
+        </div>
         </div>
       )}
 
@@ -1681,14 +1695,26 @@ function ProdutosSection({ produtos, setProdutos, editavel = true, mostrarMargem
           onFechar={() => setGerenciandoCampos(false)} />
       )}
 
-      {carregandoImagem && (
-        <div className="bg-white border border-stone-200 rounded-xl p-4 mb-4 text-xs text-stone-400">
-          Carregando produto…
+      {editavel && (editing || carregandoImagem) && (
+        // Pop-up em vez de inline: o formulário abrindo no topo da página obrigava a rolar até lá
+        // toda vez que editava um produto no fim da tabela (ver comentário do pedido do gerente).
+        // Cobre também carregandoImagem (a busca da foto antes do form montar, ver editar() acima)
+        // pra o pop-up já abrir no clique em "Editar", em vez de um "Carregando…" solto no topo
+        // seguido do pop-up de repente — mais uma rolada evitada.
+        // overflow-y-auto no overlay (não só na caixa) porque o form é alto (Sabores expandido etc)
+        // e pode passar de 100vh — sem isso o topo do form ficava inacessível em telas menores.
+        <div className="fixed inset-0 bg-black/40 z-50 overflow-y-auto p-4" onClick={cancelarEdicao}>
+          <div className="max-w-3xl mx-auto my-4 sm:my-8" onClick={(e) => e.stopPropagation()}>
+            {carregandoImagem ? (
+              <div className="bg-white border border-stone-200 rounded-xl p-4 text-xs text-stone-400">
+                Carregando produto…
+              </div>
+            ) : (
+              <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas}
+                podeAlterarCusto={podeAlterarCusto} mostrarPrecoTabelado={mostrarPrecoTabelado} />
+            )}
+          </div>
         </div>
-      )}
-      {editavel && editing && !carregandoImagem && (
-        <ProdutoForm inicial={editing} onSalvar={salvar} onCancelar={cancelarEdicao} marcas={filtro.marcas}
-          podeAlterarCusto={podeAlterarCusto} mostrarPrecoTabelado={mostrarPrecoTabelado} />
       )}
 
       <FiltroProdutosBar f={filtro} />
